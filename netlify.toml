@@ -1,2 +1,15 @@
 [build]
 publish = "."
+functions = "netlify/functions"
+
+[[redirects]]
+from = "/api/session"
+to = "/.netlify/functions/session"
+status = 200
+force = true
+
+[[redirects]]
+from = "/api/dispatch"
+to = "/.netlify/functions/dispatch"
+status = 200
+force = true

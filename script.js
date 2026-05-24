@@ -27,15 +27,63 @@ const state = {
   authProfile: null,
   authRemembered: false,
   authLocked: true,
+  storageKey: '',
+  storageCryptoKeyPromise: null,
+  wearable: {
+    bluetoothSupported: false,
+    secureContext: false,
+    status: 'disconnected', // disconnected | scanning | selecting | pairing | syncing | connected | error
+    message: '',
+    availableDevices: [],
+    connectedDevice: null,
+    lastPairedDevice: null,
+    source: 'standby',
+    batteryLevel: null,
+    signalStrength: null,
+    lastSyncAt: null,
+    scanTimerId: null,
+    stageTimerIds: [],
+    telemetryTimerId: null,
+    realDevice: null,
+    suppressDisconnectEvent: false,
+  },
 };
 
 const DANGER_SIGNALS  = ['help','danger','unsafe','attack','followed','hurt','trapped','panic','emergency','stalker',"can't breathe","dont feel safe","do not feel safe","i need help","please help"];
 const CONCERN_SIGNALS = ['worried','nervous','anxious','late','check in','check-in','lost','tense','something feels off','uncomfortable','uneasy'];
 const STORAGE_KEY = 'wearguard-settings-v2';
-const AUTH_DEVICE_KEY = 'wearguard-device-access-v1';
-const AUTH_SESSION_KEY = 'wearguard-device-session-v1';
+const WEARABLE_DEVICE_KEY = 'wearguard-last-watch-v1';
+const SESSION_ENDPOINT = '/api/session';
+const DISPATCH_ENDPOINT = '/api/dispatch';
 const LOCATION_UPDATE_INTERVAL_MS = 60 * 1000;
 const VOICE_RESTART_DELAY_MS = 900;
+const WEARABLE_TELEMETRY_INTERVAL_MS = 4200;
+const DEMO_WEARABLES = [
+  {
+    id: 'sentinel-s3',
+    name: 'Sentinel S3',
+    profile: 'Heart rate + fall detection',
+    batteryLevel: 92,
+    signalStrength: 'Strong',
+    restingHeartRate: 78,
+  },
+  {
+    id: 'halo-mini',
+    name: 'Halo Mini',
+    profile: 'Heart rate + stress sampling',
+    batteryLevel: 71,
+    signalStrength: 'Good',
+    restingHeartRate: 82,
+  },
+  {
+    id: 'luna-sport',
+    name: 'Luna Sport',
+    profile: 'Heart rate + workout stream',
+    batteryLevel: 58,
+    signalStrength: 'Fair',
+    restingHeartRate: 88,
+  },
+];
 const REMOVED_AUTO_CONTACT = {
   id: 2040793019099,
   name: 'Lesego Moeng',
@@ -46,24 +94,33 @@ const REMOVED_AUTO_CONTACT = {
 
 /* â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 window.addEventListener('DOMContentLoaded', () => {
-  restorePersistedSettings();
-  restoreDeviceAccess();
   bindAuthForm();
+  bindUiActions();
+  initWearableBridge();
+  setAuthStatus('Checking secure session...', '');
   renderAll();
+  initializeApp();
+});
 
-  if (state.authProfile) {
+async function initializeApp() {
+  const sessionRestored = await restoreServerSession();
+  if (sessionRestored) {
+    await restoreProtectedState();
+    setAuthStatus('Secure session restored.', 'success');
     unlockWearGuard({ silent: true, skipToast: true });
     return;
   }
 
+  clearProtectedRuntimeState();
   lockWearGuard();
-});
+  renderAll();
+}
 
 function bootWearGuard() {
   if (!state.booted) {
     logEvent({
       title: 'Emergency mode ready',
-      detail: 'Watch connected, heart-rate monitoring is live, Safety AI is waiting for a private code word.',
+      detail: 'WearGuard is unlocked. Pair a Bluetooth watch to stream live heart-rate data and keep Safety AI standing by.',
       icon: 'fas fa-shield-halved',
       accent: '#198A73',
     });
@@ -83,13 +140,58 @@ function bindAuthForm() {
   authForm.dataset.bound = 'true';
 }
 
-function handleDeviceLogin(event) {
+function bindUiActions() {
+  const cardHeaders = document.querySelectorAll('[data-card-target]');
+  cardHeaders.forEach((header) => {
+    if (header.dataset.bound === 'true') return;
+
+    const toggle = () => toggleCard(header.getAttribute('data-card-target'));
+    header.addEventListener('click', toggle);
+    header.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggle();
+    });
+    header.dataset.bound = 'true';
+  });
+
+  bindClick('wearableConnectBtn', () => startWearableConnection());
+  bindClick('wearableDisconnectBtn', () => disconnectWearable(true));
+  bindClick('hrSimBtn', () => simulateHighHR());
+  bindClick('voiceListenBtn', () => toggleVoiceRecognition());
+  bindClick('voiceClearBtn', () => clearVoiceTranscript());
+  bindClick('codeSaveBtn', () => saveCodeWord());
+  bindClick('countdownCancelBtn', () => cancelCountdown());
+  bindClick('addContactBtn', () => addContact());
+  bindClick('startShareBtn', () => startLocationShare());
+  bindClick('stopShareBtn', () => stopLocationShare());
+  bindClick('sendShareNowBtn', () => sendLocationNow());
+  bindClick('forgetDeviceBtn', () => forgetTrustedDevice());
+  bindClick('panicBtn', (event) => handlePanic(event));
+
+  const contactsList = document.getElementById('contactsList');
+  if (contactsList && contactsList.dataset.bound !== 'true') {
+    contactsList.addEventListener('click', handleContactsListClick);
+    contactsList.dataset.bound = 'true';
+  }
+}
+
+function bindClick(id, handler) {
+  const element = document.getElementById(id);
+  if (!element || element.dataset.bound === 'true') return;
+  element.addEventListener('click', handler);
+  element.dataset.bound = 'true';
+}
+
+async function handleDeviceLogin(event) {
   event.preventDefault();
 
   const nameInput = document.getElementById('authNameInput');
   const emailInput = document.getElementById('authEmailInput');
+  const accessCodeInput = document.getElementById('authAccessCodeInput');
   const rememberInput = document.getElementById('authRememberInput');
   const honeypotInput = document.getElementById('authWebsiteInput');
+  const submitBtn = document.getElementById('authSubmitBtn');
 
   const honeypotValue = honeypotInput ? honeypotInput.value.trim() : '';
   if (honeypotValue) {
@@ -99,6 +201,7 @@ function handleDeviceLogin(event) {
 
   const name = nameInput ? nameInput.value.trim() : '';
   const email = emailInput ? emailInput.value.trim().toLowerCase() : '';
+  const accessCode = accessCodeInput ? accessCodeInput.value.trim() : '';
   const remember = Boolean(rememberInput && rememberInput.checked);
 
   if (!name) {
@@ -113,15 +216,43 @@ function handleDeviceLogin(event) {
     return;
   }
 
-  saveDeviceAccess({ name, email }, remember);
-  state.authProfile = { name, email };
-  state.authRemembered = remember;
-  setAuthStatus(remember ? 'This device is trusted.' : 'Signed in for this session.', 'success');
-  unlockWearGuard({ silent: true });
-  showToast(remember ? 'This device will skip login next time.' : 'Signed in for this session.', 'teal');
+  if (!accessCode) {
+    setAuthStatus('Enter the access code.', 'error');
+    if (accessCodeInput) accessCodeInput.focus();
+    return;
+  }
+
+  if (submitBtn) submitBtn.disabled = true;
+  setAuthStatus('Signing in securely...', '');
+
+  try {
+    const session = await apiRequest(SESSION_ENDPOINT, {
+      method: 'POST',
+      body: {
+        name,
+        email,
+        accessCode,
+        remember,
+        honeypot: honeypotValue,
+      },
+    });
+
+    applyServerSession(session);
+    await restoreProtectedState();
+    setAuthStatus(remember ? 'Secure device session saved.' : 'Secure session opened.', 'success');
+    unlockWearGuard({ silent: true });
+    showToast(remember ? 'Secure session saved for this device.' : 'Secure session opened.', 'teal');
+  } catch (error) {
+    setAuthStatus(error.message || 'Secure sign-in failed.', 'error');
+    return;
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+    if (accessCodeInput) accessCodeInput.value = '';
+  }
+
   logEvent({
     title: 'Device access granted',
-    detail: remember ? `${name} trusted this browser for future WearGuard sign-ins.` : `${name} signed in for the current session only.`,
+    detail: remember ? `${name} opened a remembered secure session on this browser.` : `${name} signed in with a session-only secure token.`,
     icon: 'fas fa-user-shield',
     accent: '#198A73',
   });
@@ -135,7 +266,7 @@ function unlockWearGuard(options) {
   if (authGate) authGate.classList.add('hidden');
   updateDeviceAccessUi();
   if (!settings.silent) {
-    setAuthStatus('WearGuard is ready.', 'success');
+    setAuthStatus('Secure session active.', 'success');
   }
   bootWearGuard();
 }
@@ -150,17 +281,18 @@ function lockWearGuard() {
   setAuthStatus('Sign in to continue.', '');
 }
 
-function forgetTrustedDevice() {
-  clearDeviceAccess();
-  state.authProfile = null;
-  state.authRemembered = false;
+async function forgetTrustedDevice() {
+  await clearServerSession();
+  disconnectWearable(false);
+  clearProtectedRuntimeState();
   clearAuthForm();
   lockWearGuard();
-  setAuthStatus('Trusted device cleared. Sign in again to continue.', '');
-  showToast('Trusted device cleared. Sign in again to continue.', 'amber');
+  renderAll();
+  setAuthStatus('Secure session cleared. Sign in again to continue.', '');
+  showToast('Secure session cleared. Sign in again to continue.', 'amber');
   logEvent({
-    title: 'Device trust removed',
-    detail: 'WearGuard will ask for sign-in again on this browser.',
+    title: 'Secure session removed',
+    detail: 'WearGuard will ask for the access code again on this browser.',
     icon: 'fas fa-rotate-left',
     accent: '#F0A03A',
   });
@@ -189,21 +321,21 @@ function updateDeviceAccessUi() {
   if (!title || !text || !forgetBtn) return;
 
   if (state.authProfile && state.authRemembered) {
-    title.textContent = 'This device is trusted.';
-    text.textContent = `WearGuard will open without the login on this browser for ${state.authProfile.name}.`;
+    title.textContent = 'Secure device session is remembered.';
+    text.textContent = `WearGuard will restore a signed server session for ${state.authProfile.name} on this browser until you sign out or the session expires.`;
     forgetBtn.disabled = false;
     return;
   }
 
   if (state.authProfile) {
     title.textContent = 'Session-only access is active.';
-    text.textContent = `WearGuard is unlocked for ${state.authProfile.name} during this session only.`;
+    text.textContent = `WearGuard is unlocked for ${state.authProfile.name} during this browser session only.`;
     forgetBtn.disabled = false;
     return;
   }
 
-  title.textContent = 'This device is not trusted yet.';
-  text.textContent = 'Sign in and keep remember enabled if you want WearGuard to skip the login here next time.';
+  title.textContent = 'No secure session is active.';
+  text.textContent = 'Sign in with the access code and keep remember enabled if you want the server to restore this browser session next time.';
   forgetBtn.disabled = true;
 }
 
@@ -220,11 +352,13 @@ function setAuthStatus(message, tone) {
 function clearAuthForm() {
   const nameInput = document.getElementById('authNameInput');
   const emailInput = document.getElementById('authEmailInput');
+  const accessCodeInput = document.getElementById('authAccessCodeInput');
   const rememberInput = document.getElementById('authRememberInput');
   const honeypotInput = document.getElementById('authWebsiteInput');
 
   if (nameInput) nameInput.value = '';
   if (emailInput) emailInput.value = '';
+  if (accessCodeInput) accessCodeInput.value = '';
   if (rememberInput) rememberInput.checked = true;
   if (honeypotInput) honeypotInput.value = '';
 }
@@ -233,45 +367,7 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-function restoreDeviceAccess() {
-  let profile = null;
-  let remembered = false;
-
-  try {
-    const savedDevice = localStorage.getItem(AUTH_DEVICE_KEY);
-    if (savedDevice) {
-      profile = normalizeDeviceAccess(JSON.parse(savedDevice));
-      remembered = Boolean(profile);
-    }
-  } catch (error) {
-    profile = null;
-  }
-
-  if (!profile) {
-    try {
-      const savedSession = sessionStorage.getItem(AUTH_SESSION_KEY);
-      if (savedSession) {
-        profile = normalizeDeviceAccess(JSON.parse(savedSession));
-      }
-    } catch (error) {
-      profile = null;
-    }
-  }
-
-  state.authProfile = profile;
-  state.authRemembered = remembered;
-
-  const nameInput = document.getElementById('authNameInput');
-  const emailInput = document.getElementById('authEmailInput');
-  const rememberInput = document.getElementById('authRememberInput');
-  if (profile && nameInput) nameInput.value = profile.name;
-  if (profile && emailInput) emailInput.value = profile.email;
-  if (rememberInput) rememberInput.checked = remembered || !profile;
-
-  updateDeviceAccessUi();
-}
-
-function normalizeDeviceAccess(value) {
+function normalizeAuthProfile(value) {
   if (!value || typeof value !== 'object') return null;
   const name = String(value.name || '').trim();
   const email = String(value.email || '').trim().toLowerCase();
@@ -279,65 +375,862 @@ function normalizeDeviceAccess(value) {
   return { name, email };
 }
 
-function saveDeviceAccess(profile, remember) {
-  const serialized = JSON.stringify({
-    name: profile.name,
-    email: profile.email,
-    savedAt: new Date().toISOString(),
-  });
+function setStorageKey(key) {
+  state.storageKey = String(key || '');
+  state.storageCryptoKeyPromise = null;
+}
+
+function applyServerSession(payload) {
+  const profile = normalizeAuthProfile(payload && payload.profile);
+  state.authProfile = profile;
+  state.authRemembered = Boolean(payload && payload.remembered);
+  setStorageKey(payload && payload.storageKey ? payload.storageKey : '');
+
+  const nameInput = document.getElementById('authNameInput');
+  const emailInput = document.getElementById('authEmailInput');
+  const rememberInput = document.getElementById('authRememberInput');
+  if (profile && nameInput) nameInput.value = profile.name;
+  if (profile && emailInput) emailInput.value = profile.email;
+  if (rememberInput) rememberInput.checked = Boolean(payload && payload.remembered);
+  updateDeviceAccessUi();
+}
+
+function clearServerSessionState() {
+  state.authProfile = null;
+  state.authRemembered = false;
+  setStorageKey('');
+  updateDeviceAccessUi();
+}
+
+async function apiRequest(url, options) {
+  const settings = options || {};
+  const headers = {
+    Accept: 'application/json',
+    ...(settings.headers || {}),
+  };
+
+  const requestOptions = {
+    method: settings.method || 'GET',
+    credentials: 'same-origin',
+    headers,
+    cache: 'no-store',
+  };
+
+  if (typeof settings.body !== 'undefined') {
+    requestOptions.body = JSON.stringify(settings.body);
+    requestOptions.headers['Content-Type'] = 'application/json';
+  }
+
+  const response = await fetch(url, requestOptions);
+  let payload = null;
 
   try {
-    if (remember) {
-      localStorage.setItem(AUTH_DEVICE_KEY, serialized);
-      sessionStorage.removeItem(AUTH_SESSION_KEY);
-    } else {
-      sessionStorage.setItem(AUTH_SESSION_KEY, serialized);
-      localStorage.removeItem(AUTH_DEVICE_KEY);
+    payload = await response.json();
+  } catch (error) {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const message = payload && payload.error ? payload.error : 'Request failed.';
+    const requestError = new Error(message);
+    requestError.status = response.status;
+    requestError.payload = payload;
+    throw requestError;
+  }
+
+  return payload;
+}
+
+async function restoreServerSession() {
+  try {
+    const session = await apiRequest(SESSION_ENDPOINT, { method: 'GET' });
+    applyServerSession(session);
+    return Boolean(state.authProfile && state.storageKey);
+  } catch (error) {
+    clearServerSessionState();
+    return false;
+  }
+}
+
+async function clearServerSession() {
+  try {
+    await apiRequest(SESSION_ENDPOINT, { method: 'DELETE' });
+  } catch (error) {
+    // Ignore delete failures and still clear the local runtime state.
+  }
+
+  clearServerSessionState();
+}
+
+async function getStorageCryptoKey() {
+  if (!state.storageKey || !window.crypto || !window.crypto.subtle) return null;
+  if (state.storageCryptoKeyPromise) return state.storageCryptoKeyPromise;
+
+  const encoder = new TextEncoder();
+  state.storageCryptoKeyPromise = window.crypto.subtle
+    .digest('SHA-256', encoder.encode(state.storageKey))
+    .then((digest) => window.crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt']))
+    .catch((error) => {
+      state.storageCryptoKeyPromise = null;
+      throw error;
+    });
+
+  return state.storageCryptoKeyPromise;
+}
+
+function bytesToBase64(bytes) {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+async function readProtectedStorage(key) {
+  if (!state.storageKey) return null;
+
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.iv || !parsed.data) return null;
+
+    const cryptoKey = await getStorageCryptoKey();
+    if (!cryptoKey) return null;
+
+    const decrypted = await window.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBytes(parsed.iv) },
+      cryptoKey,
+      base64ToBytes(parsed.data)
+    );
+
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch (error) {
+    try {
+      localStorage.removeItem(key);
+    } catch (storageError) {
+      // Ignore cleanup failures for corrupted protected storage.
     }
-  } catch (error) {
-    // Ignore storage failures and fall back to the live session state only.
+    return null;
   }
 }
 
-function clearDeviceAccess() {
-  try {
-    localStorage.removeItem(AUTH_DEVICE_KEY);
-    sessionStorage.removeItem(AUTH_SESSION_KEY);
-  } catch (error) {
-    // Ignore storage failures during sign-out.
-  }
-}
+async function writeProtectedStorage(key, value) {
+  if (!state.storageKey) return false;
 
-function persistSettings() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      codeWord: state.codeWord,
-      contacts: state.contacts,
+    const cryptoKey = await getStorageCryptoKey();
+    if (!cryptoKey) return false;
+
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(value));
+    const encrypted = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, encoded);
+    localStorage.setItem(key, JSON.stringify({
+      iv: bytesToBase64(iv),
+      data: bytesToBase64(new Uint8Array(encrypted)),
     }));
+    return true;
   } catch (error) {
-    // Ignore storage failures and keep the session usable.
+    return false;
   }
 }
 
-function restorePersistedSettings() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const saved = JSON.parse(raw);
-      state.codeWord = typeof saved.codeWord === 'string' ? saved.codeWord : '';
-      state.contacts = Array.isArray(saved.contacts)
-        ? saved.contacts.map(normalizeContact).filter(Boolean)
-        : [];
-    }
-  } catch (error) {
-    state.contacts = [];
+function clearProtectedRuntimeState() {
+  state.codeWord = '';
+  state.contacts = [];
+  state.events = [];
+  state.conversation = 'routine';
+  state.voiceTranscript = '';
+  state.voiceInterim = '';
+  state.alertActive = false;
+  state.lastLocation = null;
+  state.wearable.connectedDevice = null;
+  state.wearable.lastPairedDevice = null;
+  state.wearable.batteryLevel = null;
+  state.wearable.signalStrength = null;
+  state.wearable.lastSyncAt = null;
+}
+
+async function restoreProtectedState() {
+  clearProtectedRuntimeState();
+
+  const [savedSettings, savedWearable] = await Promise.all([
+    readProtectedStorage(STORAGE_KEY),
+    readProtectedStorage(WEARABLE_DEVICE_KEY),
+  ]);
+
+  if (savedSettings) {
+    state.codeWord = typeof savedSettings.codeWord === 'string' ? savedSettings.codeWord : '';
+    state.contacts = Array.isArray(savedSettings.contacts)
+      ? savedSettings.contacts.map(normalizeContact).filter(Boolean)
+      : [];
   }
 
-  if (state.contacts.length && !state.contacts.some(c => c.primary)) {
+  if (state.contacts.length && !state.contacts.some((contact) => contact.primary)) {
     state.contacts[0].primary = true;
   }
 
+  if (savedWearable) {
+    state.wearable.lastPairedDevice = normalizeWearableProfile(savedWearable);
+  }
+
   removeAutoAddedEmergencyContact();
+}
+
+function initWearableBridge() {
+  state.wearable.bluetoothSupported = Boolean(navigator.bluetooth);
+  state.wearable.secureContext = Boolean(window.isSecureContext);
+  state.wearable.message = getWearableIdleMessage();
+}
+
+function normalizeWearableProfile(value) {
+  if (!value || typeof value !== 'object') return null;
+
+  const name = String(value.name || '').trim();
+  if (!name) return null;
+
+  const batteryLevel = Number(value.batteryLevel);
+  const restingHeartRate = Number(value.restingHeartRate);
+
+  return {
+    id: String(value.id || name.toLowerCase().replace(/\s+/g, '-') || Date.now()),
+    name,
+    profile: String(value.profile || 'Heart-rate sensor').trim(),
+    batteryLevel: Number.isFinite(batteryLevel) ? Math.max(0, Math.min(100, Math.round(batteryLevel))) : null,
+    signalStrength: String(value.signalStrength || 'Good').trim(),
+    restingHeartRate: Number.isFinite(restingHeartRate)
+      ? Math.max(50, Math.min(150, Math.round(restingHeartRate)))
+      : 80,
+    source: String(value.source || 'demo').trim(),
+  };
+}
+
+async function persistLastPairedWearable(device) {
+  const profile = normalizeWearableProfile(device);
+  if (!profile) return;
+
+  state.wearable.lastPairedDevice = profile;
+  await writeProtectedStorage(WEARABLE_DEVICE_KEY, {
+    ...profile,
+    savedAt: new Date().toISOString(),
+  });
+}
+
+function getWearableIdleMessage() {
+  const last = state.wearable.lastPairedDevice;
+  if (last && last.name) {
+    return `${last.name} was paired earlier. Reconnect it to resume live heart-rate monitoring.`;
+  }
+
+  return 'Scan for a nearby watch to start live heart-rate monitoring and Bluetooth safety syncing.';
+}
+
+function canUseBrowserBluetooth() {
+  return state.wearable.bluetoothSupported && state.wearable.secureContext;
+}
+
+function isWearableConnected() {
+  return state.wearable.status === 'connected';
+}
+
+function isWearableBusy() {
+  return ['scanning', 'selecting', 'pairing', 'syncing'].includes(state.wearable.status);
+}
+
+function getHeartRateForPayload() {
+  return isWearableConnected() ? state.heartRate : null;
+}
+
+function getWearableForPayload() {
+  const connectedDevice = state.wearable.connectedDevice;
+  return {
+    status: state.wearable.status,
+    source: state.wearable.source,
+    deviceName: connectedDevice ? connectedDevice.name : '',
+    batteryLevel: isWearableConnected() ? state.wearable.batteryLevel : null,
+    signalStrength: isWearableConnected() ? state.wearable.signalStrength : null,
+    lastSyncAt: state.wearable.lastSyncAt,
+  };
+}
+
+function clearWearableScanTimer() {
+  if (state.wearable.scanTimerId) {
+    clearTimeout(state.wearable.scanTimerId);
+    state.wearable.scanTimerId = null;
+  }
+}
+
+function clearWearableStageTimers() {
+  state.wearable.stageTimerIds.forEach((timerId) => clearTimeout(timerId));
+  state.wearable.stageTimerIds = [];
+}
+
+function clearWearableTelemetryTimer() {
+  if (state.wearable.telemetryTimerId) {
+    clearInterval(state.wearable.telemetryTimerId);
+    state.wearable.telemetryTimerId = null;
+  }
+}
+
+function resetWearableLink(message) {
+  clearWearableScanTimer();
+  clearWearableStageTimers();
+  clearWearableTelemetryTimer();
+
+  const realDevice = state.wearable.realDevice;
+  if (realDevice && realDevice.gatt && realDevice.gatt.connected) {
+    try {
+      state.wearable.suppressDisconnectEvent = true;
+      realDevice.gatt.disconnect();
+    } catch (error) {
+      // Ignore disconnect failures and continue resetting the local demo state.
+    }
+  }
+
+  state.wearable.availableDevices = [];
+  state.wearable.connectedDevice = null;
+  state.wearable.realDevice = null;
+  state.wearable.status = 'disconnected';
+  state.wearable.message = message || getWearableIdleMessage();
+  state.wearable.source = 'standby';
+  state.wearable.batteryLevel = null;
+  state.wearable.signalStrength = null;
+}
+
+function createDemoWearableList() {
+  return DEMO_WEARABLES.map((device) => normalizeWearableProfile({
+    ...device,
+    batteryLevel: Math.max(35, Math.min(98, device.batteryLevel + Math.floor(Math.random() * 7) - 3)),
+    signalStrength: ['Strong', 'Good', 'Fair'][Math.floor(Math.random() * 3)],
+    source: 'demo',
+  }));
+}
+
+function getNextSignalStrength(current) {
+  const levels = ['Strong', 'Good', 'Fair'];
+  const baseIndex = Math.max(0, levels.indexOf(current));
+  const nextIndex = Math.max(0, Math.min(levels.length - 1, baseIndex + (Math.floor(Math.random() * 3) - 1)));
+  return levels[nextIndex];
+}
+
+function startWearableTelemetry(device) {
+  clearWearableTelemetryTimer();
+
+  const baseRate = device && device.restingHeartRate ? device.restingHeartRate : 80;
+  state.heartRate = baseRate;
+  state.wearable.lastSyncAt = new Date().toISOString();
+
+  state.wearable.telemetryTimerId = setInterval(() => {
+    if (!isWearableConnected()) return;
+
+    const floor = Math.max(58, baseRate - 10);
+    const ceiling = Math.min(118, baseRate + 16);
+    const drift = Math.floor(Math.random() * 7) - 3;
+    const nextRate = state.heartRate + drift;
+
+    state.heartRate = Math.max(floor, Math.min(ceiling, nextRate));
+
+    if (typeof state.wearable.batteryLevel === 'number' && Math.random() < 0.22) {
+      state.wearable.batteryLevel = Math.max(12, state.wearable.batteryLevel - 1);
+    }
+
+    state.wearable.signalStrength = getNextSignalStrength(state.wearable.signalStrength || 'Good');
+    state.wearable.lastSyncAt = new Date().toISOString();
+
+    updateWearableUi();
+    updateHRDisplay();
+    updateBanner();
+  }, WEARABLE_TELEMETRY_INTERVAL_MS);
+}
+
+async function readRealWearableBatteryLevel(server) {
+  if (!server) return null;
+
+  try {
+    const service = await server.getPrimaryService('battery_service');
+    const characteristic = await service.getCharacteristic('battery_level');
+    const value = await characteristic.readValue();
+    return value.getUint8(0);
+  } catch (error) {
+    return null;
+  }
+}
+
+async function connectToRealWearable(device) {
+  if (!device || !device.gatt) {
+    return { batteryLevel: null };
+  }
+
+  try {
+    const server = await device.gatt.connect();
+    const batteryLevel = await readRealWearableBatteryLevel(server);
+    return { batteryLevel };
+  } catch (error) {
+    return { batteryLevel: null };
+  }
+}
+
+function finalizeWearableConnection(device, options) {
+  const profile = normalizeWearableProfile({
+    ...device,
+    source: options && options.source ? options.source : device.source,
+    batteryLevel: options && typeof options.batteryLevel === 'number' ? options.batteryLevel : device.batteryLevel,
+    signalStrength: options && options.signalStrength ? options.signalStrength : device.signalStrength,
+  });
+
+  if (!profile) return;
+
+  state.wearable.connectedDevice = profile;
+  state.wearable.availableDevices = [];
+  state.wearable.status = 'connected';
+  state.wearable.source = profile.source || 'demo';
+  state.wearable.batteryLevel = typeof profile.batteryLevel === 'number' ? profile.batteryLevel : 76;
+  state.wearable.signalStrength = profile.signalStrength || 'Good';
+  state.wearable.lastSyncAt = new Date().toISOString();
+  state.wearable.message = `${profile.name} connected. Live heart-rate streaming is active.`;
+
+  persistLastPairedWearable(profile);
+  startWearableTelemetry(profile);
+  renderAll();
+
+  showToast(`${profile.name} connected via Bluetooth.`, 'teal');
+  logEvent({
+    title: 'Wearable connected',
+    detail: `${profile.name} paired over ${state.wearable.source === 'browser' ? 'browser Bluetooth' : 'demo Bluetooth'} and is streaming live heart-rate data.`,
+    icon: 'fas fa-tower-broadcast',
+    accent: '#198A73',
+  });
+}
+
+async function connectWearableDevice(device, options) {
+  const profile = normalizeWearableProfile({
+    ...device,
+    source: options && options.source ? options.source : device.source,
+  });
+  if (!profile) return;
+
+  clearWearableScanTimer();
+  clearWearableStageTimers();
+  clearWearableTelemetryTimer();
+
+  state.wearable.connectedDevice = profile;
+  state.wearable.availableDevices = [];
+  state.wearable.status = 'pairing';
+  state.wearable.source = profile.source || 'demo';
+  state.wearable.message = `Pairing with ${profile.name}...`;
+  state.wearable.realDevice = options && options.realDevice ? options.realDevice : null;
+  state.wearable.suppressDisconnectEvent = false;
+
+  renderAll();
+
+  const pairTimer = setTimeout(() => {
+    state.wearable.status = 'syncing';
+    state.wearable.message = `${profile.name} paired. Syncing heart-rate and safety channels...`;
+    renderAll();
+  }, 1300);
+
+  const syncTimer = setTimeout(async () => {
+    let batteryLevel = profile.batteryLevel;
+    if (options && options.realDevice) {
+      const realLink = await connectToRealWearable(options.realDevice);
+      if (typeof realLink.batteryLevel === 'number') {
+        batteryLevel = realLink.batteryLevel;
+      }
+    }
+
+    if (!['pairing', 'syncing'].includes(state.wearable.status)) return;
+    finalizeWearableConnection(profile, {
+      source: profile.source,
+      batteryLevel,
+      signalStrength: profile.signalStrength || 'Good',
+    });
+  }, 2800);
+
+  state.wearable.stageTimerIds.push(pairTimer, syncTimer);
+}
+
+function startDemoWearableScan() {
+  clearWearableScanTimer();
+  clearWearableStageTimers();
+
+  state.wearable.availableDevices = [];
+  state.wearable.connectedDevice = null;
+  state.wearable.status = 'scanning';
+  state.wearable.source = 'demo';
+  state.wearable.message = 'Scanning for nearby Bluetooth watches...';
+
+  renderAll();
+  logEvent({
+    title: 'Wearable scan started',
+    detail: 'WearGuard started a nearby Bluetooth watch scan in demo mode.',
+    icon: 'fas fa-tower-broadcast',
+    accent: '#198A73',
+  });
+
+  state.wearable.scanTimerId = setTimeout(() => {
+    state.wearable.availableDevices = createDemoWearableList();
+    state.wearable.status = 'selecting';
+    state.wearable.message = `${state.wearable.availableDevices.length} nearby watches found. Choose one to pair.`;
+    state.wearable.scanTimerId = null;
+    renderAll();
+    showToast('Nearby watches found. Choose one to continue.', 'teal');
+  }, 1700);
+}
+
+async function requestBrowserWearable() {
+  state.wearable.availableDevices = [];
+  state.wearable.connectedDevice = null;
+  state.wearable.status = 'scanning';
+  state.wearable.source = 'browser';
+  state.wearable.message = 'Open the Bluetooth picker and choose your watch to continue.';
+
+  renderAll();
+  logEvent({
+    title: 'Bluetooth picker opened',
+    detail: 'WearGuard is waiting for a watch selection from the browser Bluetooth picker.',
+    icon: 'fas fa-tower-broadcast',
+    accent: '#198A73',
+  });
+
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: ['battery_service', 'heart_rate', 'device_information'],
+    });
+
+    if (!device) {
+      showToast('No watch was selected. Switching to demo watches.', 'amber');
+      startDemoWearableScan();
+      return;
+    }
+
+    try {
+      device.addEventListener('gattserverdisconnected', handleRealWearableDisconnect);
+    } catch (error) {
+      // Event listener support may vary by browser and device.
+    }
+
+    const profile = normalizeWearableProfile({
+      id: device.id || `watch-${Date.now()}`,
+      name: device.name || 'Unnamed Bluetooth watch',
+      profile: 'Browser-selected Bluetooth wearable',
+      batteryLevel: null,
+      signalStrength: 'Good',
+      restingHeartRate: 80,
+      source: 'browser',
+    });
+
+    await connectWearableDevice(profile, {
+      source: 'browser',
+      realDevice: device,
+    });
+  } catch (error) {
+    const wasCancelled = error && (error.name === 'NotFoundError' || error.name === 'AbortError');
+    if (wasCancelled) {
+      showToast('No watch was selected. Switching to demo watches.', 'amber');
+      startDemoWearableScan();
+      return;
+    }
+
+    showToast('Browser Bluetooth was unavailable. Switching to demo watch scan.', 'amber');
+    startDemoWearableScan();
+  }
+}
+
+function startWearableConnection() {
+  if (state.authLocked) {
+    showToast('Sign in before pairing a watch.', 'amber');
+    return;
+  }
+
+  if (isWearableConnected()) {
+    showToast('A watch is already connected. Disconnect it before pairing another one.', 'teal');
+    return;
+  }
+
+  if (isWearableBusy()) return;
+
+  if (canUseBrowserBluetooth()) {
+    requestBrowserWearable();
+    return;
+  }
+
+  startDemoWearableScan();
+}
+
+function selectWearableDevice(deviceId) {
+  if (state.wearable.status !== 'selecting') return;
+  const device = state.wearable.availableDevices.find((entry) => entry.id === deviceId);
+  if (!device) return;
+  connectWearableDevice(device, { source: 'demo' });
+}
+
+function handleRealWearableDisconnect() {
+  if (state.wearable.suppressDisconnectEvent) {
+    state.wearable.suppressDisconnectEvent = false;
+    return;
+  }
+
+  if (!isWearableConnected()) return;
+
+  const deviceName = state.wearable.connectedDevice ? state.wearable.connectedDevice.name : 'Your watch';
+  resetWearableLink(`${deviceName} lost its Bluetooth link. Reconnect to resume live heart-rate monitoring.`);
+  renderAll();
+  showToast(`${deviceName} disconnected unexpectedly.`, 'amber');
+  logEvent({
+    title: 'Wearable disconnected',
+    detail: `${deviceName} dropped the Bluetooth connection, so live watch data has paused.`,
+    icon: 'fas fa-circle-exclamation',
+    accent: '#F0A03A',
+  });
+}
+
+function disconnectWearable(userInitiated) {
+  if (state.wearable.status === 'disconnected' && !state.wearable.availableDevices.length) return;
+
+  const previousStatus = state.wearable.status;
+  const deviceName = state.wearable.connectedDevice
+    ? state.wearable.connectedDevice.name
+    : state.wearable.lastPairedDevice
+      ? state.wearable.lastPairedDevice.name
+      : 'watch pairing';
+
+  resetWearableLink(getWearableIdleMessage());
+  renderAll();
+
+  if (!userInitiated) return;
+
+  if (previousStatus === 'connected') {
+    showToast(`${deviceName} disconnected.`, 'amber');
+    logEvent({
+      title: 'Wearable disconnected',
+      detail: `${deviceName} was disconnected and live heart-rate monitoring was paused.`,
+      icon: 'fas fa-stop',
+      accent: '#F0A03A',
+    });
+    return;
+  }
+
+  showToast('Bluetooth connection cancelled.', 'amber');
+  logEvent({
+    title: 'Wearable pairing cancelled',
+    detail: `WearGuard stopped the active Bluetooth flow before ${deviceName} finished syncing.`,
+    icon: 'fas fa-stop',
+    accent: '#F0A03A',
+  });
+}
+
+function updateWearableUi() {
+  const headerStatus = document.getElementById('wearableHeaderStatus');
+  const dot = document.getElementById('wearableDot');
+  const headerLabel = document.getElementById('wearableLabel');
+  const deviceName = document.getElementById('wearableDeviceName');
+  const stateBadge = document.getElementById('wearableStateBadge');
+  const statusText = document.getElementById('wearableStatusText');
+  const modeText = document.getElementById('wearableModeText');
+  const connectBtn = document.getElementById('wearableConnectBtn');
+  const disconnectBtn = document.getElementById('wearableDisconnectBtn');
+  const deviceList = document.getElementById('wearableDeviceList');
+  const transportValue = document.getElementById('wearableTransportValue');
+  const batteryValue = document.getElementById('wearableBatteryValue');
+  const signalValue = document.getElementById('wearableSignalValue');
+  const syncValue = document.getElementById('wearableSyncValue');
+  const progressSteps = document.querySelectorAll('.wearable-step');
+
+  if (!headerStatus || !dot || !headerLabel || !deviceName || !stateBadge || !statusText || !modeText || !connectBtn || !disconnectBtn || !deviceList || !transportValue || !batteryValue || !signalValue || !syncValue || !progressSteps.length) {
+    return;
+  }
+
+  const status = state.wearable.status;
+  const connectedDevice = state.wearable.connectedDevice;
+  const lastDevice = state.wearable.lastPairedDevice;
+  const tone = status === 'connected'
+    ? 'connected'
+    : ['scanning', 'selecting', 'pairing', 'syncing'].includes(status)
+      ? 'busy'
+      : status === 'error'
+        ? 'error'
+        : 'offline';
+
+  headerStatus.className = `header-status ${tone}`;
+  dot.className = `status-dot ${tone}`;
+
+  if (status === 'connected') {
+    headerLabel.textContent = `${connectedDevice.name} connected`;
+  } else if (['scanning', 'selecting'].includes(status)) {
+    headerLabel.textContent = 'Scanning for watch';
+  } else if (['pairing', 'syncing'].includes(status)) {
+    headerLabel.textContent = 'Pairing watch';
+  } else {
+    headerLabel.textContent = 'Watch offline';
+  }
+
+  if (status === 'connected' && connectedDevice) {
+    deviceName.textContent = connectedDevice.name;
+  } else if (['pairing', 'syncing'].includes(status) && connectedDevice) {
+    deviceName.textContent = connectedDevice.name;
+  } else if (status === 'selecting') {
+    deviceName.textContent = 'Nearby watches found';
+  } else if (status === 'scanning') {
+    deviceName.textContent = 'Searching nearby';
+  } else if (lastDevice) {
+    deviceName.textContent = `${lastDevice.name} (offline)`;
+  } else {
+    deviceName.textContent = 'No watch paired';
+  }
+
+  stateBadge.className = `wearable-badge ${tone}`;
+  stateBadge.textContent = status === 'connected'
+    ? 'Connected'
+    : status === 'scanning'
+      ? 'Scanning'
+      : status === 'selecting'
+        ? 'Select a watch'
+        : status === 'pairing'
+          ? 'Pairing'
+          : status === 'syncing'
+            ? 'Syncing'
+            : status === 'error'
+              ? 'Issue'
+              : 'Offline';
+
+  statusText.textContent = state.wearable.message || getWearableIdleMessage();
+
+  if (status === 'connected') {
+    modeText.textContent = state.wearable.source === 'browser'
+      ? 'Browser Bluetooth is linked. WearGuard is demonstrating a live sensor stream on top of that connection.'
+      : 'Demo Bluetooth mode is active so you can walk through scan, pair, and live sync without real watch hardware.';
+  } else if (status === 'scanning' && state.wearable.source === 'browser') {
+    modeText.textContent = 'Choose your watch in the browser Bluetooth picker when it appears.';
+  } else if (status === 'selecting') {
+    modeText.textContent = 'Pick one of the nearby watches below to continue the Bluetooth pairing demo.';
+  } else {
+    modeText.textContent = canUseBrowserBluetooth()
+      ? 'Browser Bluetooth is available here. WearGuard opens the browser picker first, then completes pairing and sync in-app.'
+      : 'Browser Bluetooth is unavailable in this tab, so WearGuard uses a demo watch list to show the full connection flow.';
+  }
+
+  connectBtn.disabled = isWearableBusy() || status === 'connected';
+  connectBtn.innerHTML = `<i class="fas fa-tower-broadcast"></i> ${
+    status === 'connected'
+      ? 'Watch connected'
+      : status === 'scanning'
+        ? 'Scanning...'
+        : status === 'selecting'
+          ? 'Choose a watch below'
+          : status === 'pairing'
+            ? 'Pairing...'
+            : status === 'syncing'
+              ? 'Syncing...'
+              : 'Connect via Bluetooth'
+  }`;
+
+  disconnectBtn.disabled = status === 'disconnected' && !state.wearable.availableDevices.length;
+  disconnectBtn.innerHTML = `<i class="fas fa-stop"></i> ${
+    status === 'connected'
+      ? 'Disconnect'
+      : isWearableBusy()
+        ? 'Cancel'
+        : 'Disconnect'
+  }`;
+
+  transportValue.textContent = status === 'connected'
+    ? (state.wearable.source === 'browser' ? 'Browser Bluetooth' : 'Demo Bluetooth')
+    : canUseBrowserBluetooth()
+      ? 'Bluetooth ready'
+      : 'Demo fallback';
+  batteryValue.textContent = status === 'connected' && typeof state.wearable.batteryLevel === 'number'
+    ? `${state.wearable.batteryLevel}%`
+    : '--';
+  signalValue.textContent = status === 'connected'
+    ? (state.wearable.signalStrength || 'Good')
+    : status === 'scanning'
+      ? 'Searching'
+      : status === 'selecting'
+        ? `${state.wearable.availableDevices.length} found`
+        : 'Idle';
+  syncValue.textContent = status === 'connected' && state.wearable.lastSyncAt
+    ? formatTime(new Date(state.wearable.lastSyncAt))
+    : state.wearable.lastSyncAt
+      ? `Last ${formatTime(new Date(state.wearable.lastSyncAt))}`
+      : 'Not yet';
+
+  progressSteps.forEach((step) => {
+    const stepName = step.getAttribute('data-step');
+    step.classList.remove('active', 'done');
+
+    if (stepName === 'scan') {
+      if (['scanning', 'selecting'].includes(status)) step.classList.add('active');
+      if (['pairing', 'syncing', 'connected'].includes(status)) step.classList.add('done');
+    }
+
+    if (stepName === 'pair') {
+      if (status === 'pairing') step.classList.add('active');
+      if (['syncing', 'connected'].includes(status)) step.classList.add('done');
+    }
+
+    if (stepName === 'sync') {
+      if (status === 'syncing') step.classList.add('active');
+      if (status === 'connected') step.classList.add('done');
+    }
+  });
+
+  deviceList.innerHTML = '';
+  if (status === 'scanning') {
+    deviceList.innerHTML = '<div class="wearable-empty">Scanning the nearby Bluetooth space for compatible watches...</div>';
+    return;
+  }
+
+  if (!state.wearable.availableDevices.length) {
+    deviceList.innerHTML = `<div class="wearable-empty">${
+      status === 'connected'
+        ? 'Live heart-rate data is flowing from the active watch.'
+        : 'No nearby watch list yet. Start a Bluetooth scan to begin the demonstration.'
+    }</div>`;
+    return;
+  }
+
+  state.wearable.availableDevices.forEach((device) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wearable-device';
+    button.disabled = status !== 'selecting';
+    button.addEventListener('click', () => selectWearableDevice(device.id));
+
+    const topRow = document.createElement('div');
+    topRow.className = 'wearable-device-row';
+
+    const nameEl = document.createElement('strong');
+    nameEl.textContent = device.name;
+
+    const signalEl = document.createElement('span');
+    signalEl.textContent = device.signalStrength;
+
+    topRow.appendChild(nameEl);
+    topRow.appendChild(signalEl);
+
+    const copyEl = document.createElement('div');
+    copyEl.className = 'wearable-device-copy';
+    copyEl.textContent = device.profile;
+
+    const metaEl = document.createElement('div');
+    metaEl.className = 'wearable-device-meta';
+    metaEl.textContent = `${device.batteryLevel || '--'}% battery`;
+
+    button.appendChild(topRow);
+    button.appendChild(copyEl);
+    button.appendChild(metaEl);
+    deviceList.appendChild(button);
+  });
+}
+
+async function persistSettings() {
+  await writeProtectedStorage(STORAGE_KEY, {
+    codeWord: state.codeWord,
+    contacts: state.contacts,
+  });
 }
 
 function normalizeContact(contact) {
@@ -414,6 +1307,10 @@ function formatLocationText(location) {
   return `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}${acc}`;
 }
 
+function formatHeartRateText(value) {
+  return Number.isFinite(value) ? `${value} BPM` : 'Watch not connected';
+}
+
 function getLocationErrorMessage(error) {
   if (!error) return 'Location unavailable.';
   if (error.code === 1) return 'Location permission was denied.';
@@ -443,11 +1340,12 @@ function buildEmergencyPayload(reason, location, source) {
     app: 'WearGuard',
     source: source || 'manual',
     reason,
-    heartRate: state.heartRate,
+    heartRate: getHeartRateForPayload(),
     transcript: state.voiceTranscript || '',
     codeWord: state.codeWord || '',
     timestamp: new Date().toISOString(),
     location,
+    wearable: getWearableForPayload(),
     contacts: state.contacts.map(({ name, phone, whatsapp, email, primary }) => ({
       name, phone, whatsapp, email, primary,
     })),
@@ -459,7 +1357,7 @@ function buildEmergencyMessage(payload) {
     'WEARGUARD EMERGENCY ALERT',
     payload.reason,
     `Time: ${formatDateTime(payload.timestamp)}`,
-    `Heart rate: ${payload.heartRate} BPM`,
+    `Heart rate: ${formatHeartRateText(payload.heartRate)}`,
     payload.transcript ? `Detected phrase: "${payload.transcript}"` : '',
     `Location: ${formatLocationText(payload.location)}`,
     payload.location ? `Map: ${payload.location.mapsUrl}` : '',
@@ -474,9 +1372,10 @@ function buildLocationPayload(contact, location, context) {
     mode: context.mode,
     reason: context.reason || '',
     minutes: context.minutes || 0,
-    heartRate: state.heartRate,
+    heartRate: getHeartRateForPayload(),
     timestamp: new Date().toISOString(),
     location,
+    wearable: getWearableForPayload(),
   };
 }
 
@@ -487,7 +1386,7 @@ function buildLocationMessage(contact, payload) {
     `For: ${label}`,
     payload.reason || 'Current location update',
     `Time: ${formatDateTime(payload.timestamp)}`,
-    `Heart rate: ${payload.heartRate} BPM`,
+    `Heart rate: ${formatHeartRateText(payload.heartRate)}`,
     `Location: ${formatLocationText(payload.location)}`,
     payload.location ? `Map: ${payload.location.mapsUrl}` : '',
   ];
@@ -518,6 +1417,28 @@ async function postWebhook(url, payload) {
     return true;
   } catch (error) {
     return false;
+  }
+}
+
+async function dispatchSecurePayload(kind, payload) {
+  try {
+    const result = await apiRequest(DISPATCH_ENDPOINT, {
+      method: 'POST',
+      body: { kind, payload },
+    });
+
+    return {
+      delivered: Boolean(result && result.delivered),
+      mode: result && result.mode ? result.mode : 'server-relay',
+      message: result && result.message ? result.message : '',
+    };
+  } catch (error) {
+    return {
+      delivered: false,
+      mode: 'client-fallback',
+      message: error.message || 'Secure relay unavailable.',
+      unauthorized: error.status === 401,
+    };
   }
 }
 
@@ -1100,15 +2021,16 @@ async function sendEmergencyAlert(reason, options) {
   }
 
   const payload = buildEmergencyPayload(reason, location, cfg.source || 'manual');
+  const relayResult = await dispatchSecurePayload('emergency', payload);
   const message = buildEmergencyMessage(payload);
-  const deliveredChannels = primary
+  const deliveredChannels = !relayResult.delivered && primary
     ? deliverToContact(primary, 'WearGuard Emergency Alert', message, {
         allowSms: true,
         allowCall: Boolean(cfg.allowCall),
         openAll: Boolean(cfg.openAllChannels),
       })
     : [];
-  const sentAny = deliveredChannels.length > 0;
+  const sentAny = relayResult.delivered || deliveredChannels.length > 0;
 
   if (!sentAny) {
     state.alertActive = false;
@@ -1125,7 +2047,7 @@ async function sendEmergencyAlert(reason, options) {
   }
 
   const recipient = primary.name;
-  const channelSummary = deliveredChannels.join(', ');
+  const channelSummary = relayResult.delivered ? 'secure relay' : deliveredChannels.join(', ');
   const locationSummary = location ? ` Location: ${formatLocationText(location)}.` : ' Location unavailable.';
   logEvent({
     title: 'Emergency alert sent',
@@ -1178,26 +2100,66 @@ function handlePanic(e) {
 }
 
 function simulateHighHR() {
+  if (!isWearableConnected()) {
+    showToast('Connect a watch first to simulate live heart-rate spikes.', 'amber');
+    return;
+  }
+
   state.heartRate = 138 + Math.floor(Math.random() * 20);
+  state.wearable.lastSyncAt = new Date().toISOString();
   updateHRDisplay();
+  updateWearableUi();
   logEvent({ title: 'High heart rate detected', detail: `${state.heartRate} BPM - stress event flagged.`, icon: 'fas fa-heartbeat', accent: '#D65A3F' });
   showToast(`Heart rate spike: ${state.heartRate} BPM`, 'coral');
   setTimeout(() => {
+    if (!isWearableConnected()) return;
     state.heartRate = 72 + Math.floor(Math.random() * 20);
+    state.wearable.lastSyncAt = new Date().toISOString();
     updateHRDisplay();
+    updateWearableUi();
   }, 6000);
 }
 
 function updateHRDisplay() {
+  const hrNumber = document.getElementById('hrNumber');
+  const bar = document.getElementById('hrBar');
+  const hrChipValue = document.getElementById('hrChipVal');
+  const hrChipIcon = document.getElementById('hrChip').querySelector('i');
+  const simBtn = document.getElementById('hrSimBtn');
+
+  if (!hrNumber || !bar || !hrChipValue || !hrChipIcon || !simBtn) return;
+
+  if (!isWearableConnected()) {
+    const waitingStatus = state.wearable.status;
+    hrNumber.textContent = waitingStatus === 'syncing' ? '..' : '--';
+    hrNumber.className = 'hr-number offline';
+    bar.style.width = waitingStatus === 'syncing' ? '34%' : waitingStatus === 'pairing' ? '22%' : waitingStatus === 'scanning' ? '14%' : '6%';
+    bar.className = 'hr-bar muted';
+    hrChipValue.textContent = waitingStatus === 'scanning'
+      ? 'Scanning...'
+      : waitingStatus === 'selecting'
+        ? 'Choose watch'
+        : waitingStatus === 'pairing'
+          ? 'Pairing...'
+          : waitingStatus === 'syncing'
+            ? 'Syncing sensor'
+            : 'Watch offline';
+    hrChipIcon.style.color = 'rgba(22,59,53,.35)';
+    simBtn.disabled = true;
+    simBtn.innerHTML = '<i class="fas fa-tower-broadcast"></i> Connect a watch to simulate a stress event';
+    return;
+  }
+
   const high = state.heartRate >= 132;
   const pct = Math.min(100, Math.max(5, ((state.heartRate - 40) / 100) * 100));
-  document.getElementById('hrNumber').textContent = state.heartRate;
-  document.getElementById('hrNumber').className = 'hr-number' + (high ? ' high' : '');
-  const bar = document.getElementById('hrBar');
+  hrNumber.textContent = state.heartRate;
+  hrNumber.className = 'hr-number' + (high ? ' high' : '');
   bar.style.width = pct + '%';
   bar.className = 'hr-bar' + (high ? ' high' : '');
-  document.getElementById('hrChipVal').textContent = state.heartRate + ' BPM';
-  document.getElementById('hrChip').querySelector('i').style.color = high ? '#D65A3F' : '#F0A03A';
+  hrChipValue.textContent = state.heartRate + ' BPM';
+  hrChipIcon.style.color = high ? '#D65A3F' : '#F0A03A';
+  simBtn.disabled = false;
+  simBtn.innerHTML = '<i class="fas fa-bolt"></i> Simulate high heart rate (stress event)';
 }
 
 /* â”€â”€ CONTACTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -1244,31 +2206,95 @@ function setPrimary(id) {
   showToast('Primary contact updated.');
 }
 
-function renderContacts() {
-  const ul = document.getElementById('contactsList');
-  ul.innerHTML = '';
-  if (!state.contacts.length) {
-    ul.innerHTML = '<li style="color:rgba(22,59,53,.4);font-size:12px;font-weight:500;justify-content:center;">No contacts yet - add one above.</li>';
+function handleContactsListClick(event) {
+  const actionButton = event.target.closest('button[data-contact-action]');
+  if (!actionButton) return;
+
+  const contactId = Number(actionButton.getAttribute('data-contact-id'));
+  if (!Number.isFinite(contactId)) return;
+
+  if (actionButton.getAttribute('data-contact-action') === 'primary') {
+    setPrimary(contactId);
     return;
   }
+
+  if (actionButton.getAttribute('data-contact-action') === 'remove') {
+    removeContact(contactId);
+  }
+}
+
+function renderContacts() {
+  const ul = document.getElementById('contactsList');
+  if (!ul) return;
+
+  ul.replaceChildren();
+  if (!state.contacts.length) {
+    const emptyItem = document.createElement('li');
+    emptyItem.className = 'settings-empty';
+    emptyItem.textContent = 'No contacts yet - add one above.';
+    ul.appendChild(emptyItem);
+    return;
+  }
+
   state.contacts.forEach(c => {
     const li = document.createElement('li');
     const initials = c.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2);
     const detail = [c.phone, c.whatsapp ? `WA: ${c.whatsapp}` : '', c.email].filter(Boolean).join(' - ');
-    li.innerHTML = `
-      <div class="contact-avatar ${c.primary ? 'primary' : ''}">${initials}</div>
-      <div class="contact-info">
-        <div class="contact-name">${c.name} <span class="primary-badge ${c.primary ? 'show' : ''}">Primary</span></div>
-        <div class="contact-detail">${detail || 'No details'}</div>
-      </div>
-      <div class="contact-actions">
-        <button class="icon-btn star ${c.primary ? 'active' : ''}" title="Set as primary" onclick="setPrimary(${c.id})">
-          <i class="fas fa-star"></i>
-        </button>
-        <button class="icon-btn del" title="Remove" onclick="removeContact(${c.id})">
-          <i class="fas fa-trash"></i>
-        </button>
-      </div>`;
+
+    const avatar = document.createElement('div');
+    avatar.className = `contact-avatar${c.primary ? ' primary' : ''}`;
+    avatar.textContent = initials;
+
+    const info = document.createElement('div');
+    info.className = 'contact-info';
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'contact-name';
+    nameRow.append(document.createTextNode(c.name + ' '));
+
+    const badge = document.createElement('span');
+    badge.className = `primary-badge${c.primary ? ' show' : ''}`;
+    badge.textContent = 'Primary';
+    nameRow.appendChild(badge);
+
+    const detailRow = document.createElement('div');
+    detailRow.className = 'contact-detail';
+    detailRow.textContent = detail || 'No details';
+
+    info.appendChild(nameRow);
+    info.appendChild(detailRow);
+
+    const actions = document.createElement('div');
+    actions.className = 'contact-actions';
+
+    const primaryButton = document.createElement('button');
+    primaryButton.type = 'button';
+    primaryButton.className = `icon-btn star${c.primary ? ' active' : ''}`;
+    primaryButton.title = 'Set as primary';
+    primaryButton.setAttribute('data-contact-action', 'primary');
+    primaryButton.setAttribute('data-contact-id', String(c.id));
+
+    const primaryIcon = document.createElement('i');
+    primaryIcon.className = 'fas fa-star';
+    primaryButton.appendChild(primaryIcon);
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'icon-btn del';
+    removeButton.title = 'Remove';
+    removeButton.setAttribute('data-contact-action', 'remove');
+    removeButton.setAttribute('data-contact-id', String(c.id));
+
+    const removeIcon = document.createElement('i');
+    removeIcon.className = 'fas fa-trash';
+    removeButton.appendChild(removeIcon);
+
+    actions.appendChild(primaryButton);
+    actions.appendChild(removeButton);
+
+    li.appendChild(avatar);
+    li.appendChild(info);
+    li.appendChild(actions);
     ul.appendChild(li);
   });
 }
@@ -1339,8 +2365,9 @@ async function sendLocationPayload(contact, context, options) {
   const cfg = options || {};
   const location = cfg.location || await getCurrentLocation();
   const payload = buildLocationPayload(contact, location, context || {});
+  const relayResult = await dispatchSecurePayload('location', payload);
   const message = buildLocationMessage(contact, payload);
-  const deliveredChannels = cfg.openRoutes && contact
+  const deliveredChannels = !relayResult.delivered && cfg.openRoutes && contact
     ? deliverToContact(contact, 'WearGuard Location Update', message, {
         allowSms: true,
         allowCall: false,
@@ -1351,8 +2378,11 @@ async function sendLocationPayload(contact, context, options) {
   return {
     location,
     payload,
+    relayDelivered: relayResult.delivered,
+    relayMode: relayResult.mode,
+    relayMessage: relayResult.message,
     deliveredChannels,
-    sentAny: deliveredChannels.length > 0,
+    sentAny: relayResult.delivered || deliveredChannels.length > 0,
   };
 }
 
@@ -1417,13 +2447,13 @@ async function startLocationShare() {
   }
 
   state.lastLocationSentAt = Date.now();
-  const startSummary = initialResult.deliveredChannels.join(', ');
+  const startSummary = initialResult.relayDelivered ? 'secure relay' : initialResult.deliveredChannels.join(', ');
   const continuousNote = 'manual updates only';
   updateShareStatus(true, `Sharing with ${contact.name} - ${continuousNote}`);
   showToast(`Location sent via ${startSummary || 'contact route'}.`, 'teal');
   logEvent({
     title: 'Location sharing started',
-    detail: `Real location sent to ${contact.name}. ${continuousNote}.`,
+    detail: `Real location sent to ${contact.name} via ${startSummary || 'contact route'}. ${continuousNote}.`,
     icon: 'fas fa-location-arrow',
     accent: '#198A73',
   });
@@ -1491,7 +2521,7 @@ async function sendLocationNow() {
       return;
     }
 
-    const channelSummary = result.deliveredChannels.join(', ');
+    const channelSummary = result.relayDelivered ? 'secure relay' : result.deliveredChannels.join(', ');
     showToast(`Location sent via ${channelSummary || 'contact route'}.`, 'teal');
     logEvent({
       title: 'Location sent',
@@ -1538,6 +2568,15 @@ function updateBanner() {
     icon.innerHTML  = '<i class="fas fa-circle-exclamation"></i>';
     label.textContent = 'CONCERN DETECTED';
     text.textContent  = 'Safety AI is on elevated watch. Tap panic button if you need help.';
+  } else if (!isWearableConnected()) {
+    banner.classList.add('offline');
+    icon.innerHTML = '<i class="fas fa-tower-broadcast"></i>';
+    label.textContent = ['scanning', 'selecting', 'pairing', 'syncing'].includes(state.wearable.status)
+      ? 'CONNECTING WATCH'
+      : 'WATCH OFFLINE';
+    text.textContent = ['scanning', 'selecting', 'pairing', 'syncing'].includes(state.wearable.status)
+      ? 'Bluetooth pairing is in progress. Live heart-rate monitoring will start when the watch finishes syncing.'
+      : 'Pair a Bluetooth watch to start live heart-rate monitoring. Safety AI can still listen from this device.';
   } else {
     icon.innerHTML  = '<i class="fas fa-shield-halved"></i>';
     label.textContent = 'ALL CLEAR';
@@ -1560,17 +2599,46 @@ function logEvent({ title, detail, icon, accent }) {
 
 function renderEvents() {
   const list = document.getElementById('eventList');
-  list.innerHTML = state.events.map(ev => `
-    <div class="event-row">
-      <div class="event-icon-wrap" style="background:${accent20(ev.accent)};color:${ev.accent}">
-        <i class="${ev.icon}"></i>
-      </div>
-      <div class="event-body">
-        <div class="event-title">${ev.title}</div>
-        <div class="event-detail">${ev.detail}</div>
-        <div class="event-time">${formatTime(ev.time)}</div>
-      </div>
-    </div>`).join('');
+  if (!list) return;
+
+  list.replaceChildren();
+
+  state.events.forEach((ev) => {
+    const row = document.createElement('div');
+    row.className = 'event-row';
+
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'event-icon-wrap';
+    iconWrap.style.background = accent20(ev.accent);
+    iconWrap.style.color = ev.accent;
+
+    const icon = document.createElement('i');
+    icon.className = ev.icon;
+    iconWrap.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'event-body';
+
+    const title = document.createElement('div');
+    title.className = 'event-title';
+    title.textContent = ev.title;
+
+    const detail = document.createElement('div');
+    detail.className = 'event-detail';
+    detail.textContent = ev.detail;
+
+    const time = document.createElement('div');
+    time.className = 'event-time';
+    time.textContent = formatTime(ev.time);
+
+    body.appendChild(title);
+    body.appendChild(detail);
+    body.appendChild(time);
+
+    row.appendChild(iconWrap);
+    row.appendChild(body);
+    list.appendChild(row);
+  });
 }
 
 function accent20(hex) {
@@ -1583,7 +2651,15 @@ function formatTime(d) {
 
 /* â”€â”€ CARD TOGGLE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function toggleCard(id) {
-  document.getElementById(id).classList.toggle('open');
+  const card = document.getElementById(id);
+  if (!card) return;
+
+  card.classList.toggle('open');
+
+  const header = card.querySelector('[data-card-target]');
+  if (header) {
+    header.setAttribute('aria-expanded', card.classList.contains('open') ? 'true' : 'false');
+  }
 }
 
 /* â”€â”€ TOAST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -1602,6 +2678,7 @@ function showToast(msg, type) {
 
 /* â”€â”€ RENDER ALL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function renderAll() {
+  updateWearableUi();
   updateHRDisplay();
   updateBanner();
   updateChips();

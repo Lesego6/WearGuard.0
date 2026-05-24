@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>WearGuard</title>
+<meta name="referrer" content="no-referrer" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body class="auth-locked">
@@ -14,8 +15,9 @@
       <div class="auth-badge"><i class="fas fa-shield-halved"></i> Device Access</div>
       <h1 class="auth-title" id="authTitle">Sign in to WearGuard</h1>
       <p class="auth-copy">
-        Use your name and email to unlock WearGuard. Keep <strong>Remember this device</strong>
-        turned on if you want this browser to skip the login next time.
+        Use your name, email, and access code to open a secure WearGuard session.
+        Keep <strong>Remember this device</strong> turned on if you want the server to keep
+        this browser signed in between visits.
       </p>
       <form class="auth-form" id="authForm">
         <div class="auth-field-grid">
@@ -28,6 +30,10 @@
             <input id="authEmailInput" type="email" autocomplete="email" placeholder="name@example.com" />
           </label>
         </div>
+        <label class="auth-field" for="authAccessCodeInput">
+          <span>Access code</span>
+          <input id="authAccessCodeInput" type="password" autocomplete="one-time-code" placeholder="Team access code" />
+        </label>
         <div class="hp-field" aria-hidden="true">
           <label for="authWebsiteInput">Website</label>
           <input id="authWebsiteInput" type="text" name="website" tabindex="-1" autocomplete="off" />
@@ -39,7 +45,7 @@
         <button class="auth-submit" id="authSubmitBtn" type="submit">
           <i class="fas fa-user-shield"></i> Enter WearGuard
         </button>
-        <p class="auth-status" id="authStatusText">This is a once-off sign-in on trusted devices.</p>
+        <p class="auth-status" id="authStatusText">Secure sign-in checks a server session before WearGuard unlocks.</p>
       </form>
     </div>
   </div>
@@ -61,9 +67,9 @@
         <div class="logo-text">Wear<span>Guard</span></div>
       </div>
     </div>
-    <div class="header-status">
+    <div class="header-status offline" id="wearableHeaderStatus">
       <div class="status-dot" id="wearableDot"></div>
-      <span id="wearableLabel">Watch connected</span>
+      <span id="wearableLabel">Watch offline</span>
     </div>
   </header>
 
@@ -76,6 +82,80 @@
     </div>
   </div>
 
+  <div class="section-card open" id="cardWearable">
+    <div class="section-header" data-card-target="cardWearable" role="button" tabindex="0" aria-expanded="true">
+      <div class="section-icon"><i class="fas fa-tower-broadcast"></i></div>
+      <div>
+        <div class="section-title">Wearable Link</div>
+        <div class="section-subtitle">Bluetooth pairing and watch sync</div>
+      </div>
+      <i class="fas fa-chevron-down section-chevron"></i>
+    </div>
+    <div class="section-body">
+      <div class="wearable-shell">
+        <div class="wearable-topline">
+          <div>
+            <div class="wearable-kicker">Nearby safety watch</div>
+            <div class="wearable-name" id="wearableDeviceName">No watch paired</div>
+          </div>
+          <div class="wearable-badge offline" id="wearableStateBadge">Offline</div>
+        </div>
+
+        <p class="wearable-copy" id="wearableStatusText">
+          Scan for a nearby watch to start live heart-rate monitoring and Bluetooth safety syncing.
+        </p>
+        <div class="wearable-copy subtle" id="wearableModeText">
+          Bluetooth mode will switch to a demo device list when browser Bluetooth is unavailable.
+        </div>
+
+        <div class="wearable-progress" id="wearableProgress">
+          <div class="wearable-step" data-step="scan">
+            <span class="wearable-step-dot">1</span>
+            <span>Scan</span>
+          </div>
+          <div class="wearable-step" data-step="pair">
+            <span class="wearable-step-dot">2</span>
+            <span>Pair</span>
+          </div>
+          <div class="wearable-step" data-step="sync">
+            <span class="wearable-step-dot">3</span>
+            <span>Sync</span>
+          </div>
+        </div>
+
+        <div class="wearable-actions">
+          <button class="mini-btn" id="wearableConnectBtn" type="button">
+            <i class="fas fa-tower-broadcast"></i> Connect via Bluetooth
+          </button>
+          <button class="mini-btn secondary" id="wearableDisconnectBtn" type="button">
+            <i class="fas fa-stop"></i> Disconnect
+          </button>
+        </div>
+
+        <div class="wearable-device-list" id="wearableDeviceList" aria-live="polite"></div>
+
+        <div class="wearable-metrics">
+          <div class="wearable-metric">
+            <div class="wearable-metric-label">Transport</div>
+            <div class="wearable-metric-value" id="wearableTransportValue">Bluetooth standby</div>
+          </div>
+          <div class="wearable-metric">
+            <div class="wearable-metric-label">Battery</div>
+            <div class="wearable-metric-value" id="wearableBatteryValue">--</div>
+          </div>
+          <div class="wearable-metric">
+            <div class="wearable-metric-label">Signal</div>
+            <div class="wearable-metric-value" id="wearableSignalValue">Idle</div>
+          </div>
+          <div class="wearable-metric">
+            <div class="wearable-metric-label">Last sync</div>
+            <div class="wearable-metric-value" id="wearableSyncValue">Not yet</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- CHIP ROW -->
   <div class="chip-row">
     <div class="chip amber" id="hrChip"><i class="fas fa-heart"></i> <span id="hrChipVal">84 BPM</span></div>
@@ -85,7 +165,7 @@
 
   <!-- â”€â”€ HEART RATE CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
   <div class="section-card open" id="cardHR">
-    <div class="section-header" onclick="toggleCard('cardHR')">
+    <div class="section-header" data-card-target="cardHR" role="button" tabindex="0" aria-expanded="true">
       <div class="section-icon"><i class="fas fa-heartbeat"></i></div>
       <div>
         <div class="section-title">Heart Rate Monitor</div>
@@ -101,12 +181,12 @@
         </div>
         <div class="hr-right">
           <div class="hr-bar-wrap">
-            <div class="hr-bar" id="hrBar" style="width:42%"></div>
+            <div class="hr-bar" id="hrBar"></div>
           </div>
           <div class="hr-labels"><span>40</span><span>90</span><span>140+</span></div>
         </div>
       </div>
-      <button class="hr-sim-btn" id="hrSimBtn" onclick="simulateHighHR()">
+      <button class="hr-sim-btn" id="hrSimBtn" type="button">
         <i class="fas fa-bolt"></i> Simulate high heart rate (stress event)
       </button>
     </div>
@@ -114,7 +194,7 @@
 
   <!-- â”€â”€ SAFETY AI CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
   <div class="section-card open" id="cardAI">
-    <div class="section-header" onclick="toggleCard('cardAI')">
+    <div class="section-header" data-card-target="cardAI" role="button" tabindex="0" aria-expanded="true">
       <div class="section-icon"><i class="fas fa-brain"></i></div>
       <div>
         <div class="section-title">Safety AI</div>
@@ -141,10 +221,10 @@
           Voice capture starts automatically when the page opens.
         </div>
         <div class="voice-controls">
-          <button class="voice-btn" id="voiceListenBtn" type="button" onclick="toggleVoiceRecognition()">
+          <button class="voice-btn" id="voiceListenBtn" type="button">
             <i class="fas fa-stop"></i> Pause listening
           </button>
-          <button class="voice-btn secondary" id="voiceClearBtn" type="button" onclick="clearVoiceTranscript()">
+          <button class="voice-btn secondary" id="voiceClearBtn" type="button">
             <i class="fas fa-rotate-left"></i> Clear
           </button>
         </div>
@@ -152,21 +232,21 @@
       <div class="code-word-row">
         <input class="code-input" id="codeWordInput" type="text"
           placeholder="Set private code word (e.g. pineapple)" />
-        <button class="code-save-btn" onclick="saveCodeWord()">
+        <button class="code-save-btn" id="codeSaveBtn" type="button">
           <i class="fas fa-key"></i> Save
         </button>
       </div>
       <div class="countdown-bar" id="countdownBar">
         <div class="cd-timer" id="cdTimer">2:00</div>
         <div class="cd-text">Immediate alert mode is enabled.<br>Danger signals dispatch the alert without delay.</div>
-        <button class="cd-cancel" onclick="cancelCountdown()">Cancel</button>
+        <button class="cd-cancel" id="countdownCancelBtn" type="button">Cancel</button>
       </div>
     </div>
   </div>
 
   <!-- â”€â”€ SETTINGS CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
   <div class="section-card" id="cardSettings">
-    <div class="section-header" onclick="toggleCard('cardSettings')">
+    <div class="section-header" data-card-target="cardSettings" role="button" tabindex="0" aria-expanded="false">
       <div class="section-icon"><i class="fas fa-sliders"></i></div>
       <div>
         <div class="section-title">Safety Settings</div>
@@ -186,7 +266,7 @@
         <div class="settings-row">
           <input id="contactWhatsAppInput" type="tel"   placeholder="WhatsApp (with country code)" />
           <input id="contactEmailInput"    type="email" placeholder="Email (for alerts)" />
-          <button id="addContactBtn" class="mini-btn" type="button" onclick="addContact()">
+          <button id="addContactBtn" class="mini-btn" type="button">
             <i class="fas fa-user-plus"></i> Add
           </button>
         </div>
@@ -208,13 +288,13 @@
           </select>
         </div>
         <div class="settings-row">
-          <button id="startShareBtn"   class="mini-btn"           type="button" onclick="startLocationShare()">
+          <button id="startShareBtn"   class="mini-btn"           type="button">
             <i class="fas fa-share-alt"></i> Start sharing
           </button>
-          <button id="stopShareBtn"    class="mini-btn secondary" type="button" onclick="stopLocationShare()">
+          <button id="stopShareBtn"    class="mini-btn secondary" type="button">
             <i class="fas fa-stop"></i> Stop
           </button>
-          <button id="sendShareNowBtn" class="mini-btn secondary" type="button" onclick="sendLocationNow()">
+          <button id="sendShareNowBtn" class="mini-btn secondary" type="button">
             <i class="fas fa-paper-plane"></i> Send now
           </button>
         </div>
@@ -231,7 +311,7 @@
           <div class="device-access-copy" id="deviceAccessText">Sign in and keep remember enabled if you want WearGuard to skip the login here next time.</div>
         </div>
         <div class="settings-row">
-          <button id="forgetDeviceBtn" class="mini-btn secondary" type="button" onclick="forgetTrustedDevice()">
+          <button id="forgetDeviceBtn" class="mini-btn secondary" type="button">
             <i class="fas fa-rotate-left"></i> Forget this device
           </button>
         </div>
@@ -243,7 +323,7 @@
 
   <!-- â”€â”€ ACTIVITY LOG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
   <div class="section-card open" id="cardLog">
-    <div class="section-header" onclick="toggleCard('cardLog')">
+    <div class="section-header" data-card-target="cardLog" role="button" tabindex="0" aria-expanded="true">
       <div class="section-icon"><i class="fas fa-clock-rotate-left"></i></div>
       <div>
         <div class="section-title">Activity Log</div>
@@ -260,7 +340,7 @@
 
 <!-- PANIC BUTTON DOCK -->
 <div class="panic-dock">
-  <button class="panic-btn" id="panicBtn" onclick="handlePanic(event)">
+  <button class="panic-btn" id="panicBtn" type="button">
     <i class="fas fa-triangle-exclamation btn-icon"></i>
     <span id="panicBtnLabel">Send Emergency Alert</span>
   </button>
