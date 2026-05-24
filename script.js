@@ -29,6 +29,7 @@ const state = {
   authLocked: true,
   storageKey: '',
   storageCryptoKeyPromise: null,
+  security: createDefaultSecurityState(),
   wearable: {
     bluetoothSupported: false,
     secureContext: false,
@@ -55,6 +56,7 @@ const STORAGE_KEY = 'wearguard-settings-v2';
 const WEARABLE_DEVICE_KEY = 'wearguard-last-watch-v1';
 const SESSION_ENDPOINT = '/api/session';
 const DISPATCH_ENDPOINT = '/api/dispatch';
+const DEV_LOCAL_SESSION_KEY = 'wearguard-local-dev-session-v1';
 const LOCATION_UPDATE_INTERVAL_MS = 60 * 1000;
 const VOICE_RESTART_DELAY_MS = 900;
 const WEARABLE_TELEMETRY_INTERVAL_MS = 4200;
@@ -91,6 +93,182 @@ const REMOVED_AUTO_CONTACT = {
   whatsapp: '0793019099',
   email: 'lesegomoeng0204@gmail.con',
 };
+
+const SECURITY_SCALE = {
+  low: { label: 'Low', weight: 1 },
+  moderate: { label: 'Moderate', weight: 2 },
+  high: { label: 'High', weight: 3 },
+  critical: { label: 'Critical', weight: 4 },
+};
+
+const SECURITY_THREAT_CATALOG = [
+  {
+    id: 'unauthorizedAccess',
+    title: 'Unauthorized access to secure workflows',
+    detail: 'Review sign-in, remembered sessions, and local-development bypass behavior as a trust boundary.',
+    mitigation: 'Use strong identity, rate limiting, and deployment secrets before production rollout.',
+  },
+  {
+    id: 'wearableSpoofing',
+    title: 'Spoofed or tampered wearable telemetry',
+    detail: 'Confirm how a paired watch is trusted before heart-rate data can influence panic or monitoring flows.',
+    mitigation: 'Only trust Bluetooth sessions in secure contexts and clearly separate demo devices from real wearables.',
+  },
+  {
+    id: 'localDataExposure',
+    title: 'Local exposure of contacts and code words',
+    detail: 'Map when sensitive browser storage becomes available and what an attacker could read after session compromise.',
+    mitigation: 'Keep retained data minimal, encrypted against the active session key, and review retention carefully.',
+  },
+  {
+    id: 'alertRelayAbuse',
+    title: 'Alert relay abuse or delivery downgrade',
+    detail: 'Assess how emergency dispatch behaves when secure relay is unavailable or downstream webhooks trust too much.',
+    mitigation: 'Prefer authenticated relay in production and rate-limit alert dispatch to downstream integrations.',
+  },
+  {
+    id: 'permissionMisuse',
+    title: 'Over-privileged browser permissions',
+    detail: 'Check that Bluetooth, microphone, and location prompts are only requested when the user intentionally enables them.',
+    mitigation: 'Keep permission requests contextual and make denied permissions degrade safely.',
+  },
+];
+
+const SECURITY_CODING_REVIEW_ITEMS = [
+  {
+    id: 'inputValidation',
+    title: 'Input validation reviewed',
+    detail: 'User-entered names, emails, contacts, and review fields should be normalized before use or storage.',
+  },
+  {
+    id: 'safeRendering',
+    title: 'Unsafe HTML injection removed',
+    detail: 'Dynamic platform content should render through DOM APIs instead of writing raw HTML strings.',
+  },
+  {
+    id: 'secretHandling',
+    title: 'Secrets kept out of client code',
+    detail: 'Environment values and webhook secrets should stay on the server or deployment platform.',
+  },
+  {
+    id: 'authHardening',
+    title: 'Authentication and session flow reviewed',
+    detail: 'Session creation, remember-device behavior, and local exceptions should have explicit owner approval.',
+  },
+  {
+    id: 'dependencyConfig',
+    title: 'Dependency and configuration review completed',
+    detail: 'Confirm deployment headers, environment variables, and any third-party services before release.',
+  },
+];
+
+const SECURITY_INTEGRATION_REVIEW_ITEMS = [
+  {
+    id: 'sessionDeployment',
+    title: 'Session deployment reviewed',
+    detail: 'Validate cookies, environment variables, and the behavior of local-development fallbacks.',
+  },
+  {
+    id: 'alertRelay',
+    title: 'Alert relay and downstream webhook reviewed',
+    detail: 'Confirm authenticated delivery, rate limits, and incident ownership for real alert integrations.',
+  },
+  {
+    id: 'permissionJourneys',
+    title: 'Permission journeys tested',
+    detail: 'Walk through Bluetooth, microphone, and location prompts on the target browsers and devices.',
+  },
+  {
+    id: 'dataRetention',
+    title: 'Data retention and privacy reviewed',
+    detail: 'Document what contacts, code words, and review notes are stored and when they should be removed.',
+  },
+];
+
+function createDefaultSecurityState() {
+  return {
+    owner: '',
+    reviewDate: '',
+    scope: 'pilot',
+    exposure: 'moderate',
+    dataSensitivity: 'high',
+    integrationCriticality: 'high',
+    attackSurface: 'moderate',
+    designReviewNotes: 'Review auth flow, wearable trust boundaries, data retention, and alert delivery downgrade paths before release.',
+    integrationNotes: 'Validate session cookies, permission prompts, secure relay, and browser storage behavior in the target deployment.',
+    threatReviews: normalizeChecklistValues(SECURITY_THREAT_CATALOG, {}),
+    secureCodingReviews: normalizeChecklistValues(SECURITY_CODING_REVIEW_ITEMS, {
+      inputValidation: true,
+      safeRendering: true,
+      secretHandling: true,
+      authHardening: true,
+      dependencyConfig: false,
+    }),
+    integrationReviews: normalizeChecklistValues(SECURITY_INTEGRATION_REVIEW_ITEMS, {
+      sessionDeployment: true,
+      alertRelay: false,
+      permissionJourneys: true,
+      dataRetention: false,
+    }),
+    testing: {
+      lastRunAt: '',
+      findings: [],
+      passCount: 0,
+      warnCount: 0,
+      failCount: 0,
+    },
+  };
+}
+
+function normalizeChecklistValues(items, values) {
+  const source = values && typeof values === 'object' ? values : {};
+  return items.reduce((result, item) => {
+    result[item.id] = Boolean(source[item.id]);
+    return result;
+  }, {});
+}
+
+function normalizeSecurityFinding(value) {
+  if (!value || typeof value !== 'object') return null;
+
+  const status = ['pass', 'warn', 'fail'].includes(value.status) ? value.status : 'warn';
+  const title = String(value.title || '').trim();
+  const detail = String(value.detail || '').trim();
+  if (!title || !detail) return null;
+
+  return { status, title, detail };
+}
+
+function normalizeSecurityState(value) {
+  const defaults = createDefaultSecurityState();
+  const source = value && typeof value === 'object' ? value : {};
+  const testingSource = source.testing && typeof source.testing === 'object' ? source.testing : {};
+  const normalizedFindings = Array.isArray(testingSource.findings)
+    ? testingSource.findings.map(normalizeSecurityFinding).filter(Boolean)
+    : [];
+
+  return {
+    owner: String(source.owner || '').trim(),
+    reviewDate: String(source.reviewDate || '').trim(),
+    scope: ['prototype', 'pilot', 'production'].includes(source.scope) ? source.scope : defaults.scope,
+    exposure: SECURITY_SCALE[source.exposure] ? source.exposure : defaults.exposure,
+    dataSensitivity: SECURITY_SCALE[source.dataSensitivity] ? source.dataSensitivity : defaults.dataSensitivity,
+    integrationCriticality: SECURITY_SCALE[source.integrationCriticality] ? source.integrationCriticality : defaults.integrationCriticality,
+    attackSurface: SECURITY_SCALE[source.attackSurface] ? source.attackSurface : defaults.attackSurface,
+    designReviewNotes: typeof source.designReviewNotes === 'string' ? source.designReviewNotes.trim() : defaults.designReviewNotes,
+    integrationNotes: typeof source.integrationNotes === 'string' ? source.integrationNotes.trim() : defaults.integrationNotes,
+    threatReviews: normalizeChecklistValues(SECURITY_THREAT_CATALOG, source.threatReviews || defaults.threatReviews),
+    secureCodingReviews: normalizeChecklistValues(SECURITY_CODING_REVIEW_ITEMS, source.secureCodingReviews || defaults.secureCodingReviews),
+    integrationReviews: normalizeChecklistValues(SECURITY_INTEGRATION_REVIEW_ITEMS, source.integrationReviews || defaults.integrationReviews),
+    testing: {
+      lastRunAt: String(testingSource.lastRunAt || '').trim(),
+      findings: normalizedFindings,
+      passCount: Number.isFinite(Number(testingSource.passCount)) ? Math.max(0, Number(testingSource.passCount)) : normalizedFindings.filter((finding) => finding.status === 'pass').length,
+      warnCount: Number.isFinite(Number(testingSource.warnCount)) ? Math.max(0, Number(testingSource.warnCount)) : normalizedFindings.filter((finding) => finding.status === 'warn').length,
+      failCount: Number.isFinite(Number(testingSource.failCount)) ? Math.max(0, Number(testingSource.failCount)) : normalizedFindings.filter((finding) => finding.status === 'fail').length,
+    },
+  };
+}
 
 /* â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 window.addEventListener('DOMContentLoaded', () => {
@@ -174,6 +352,8 @@ function bindUiActions() {
     contactsList.addEventListener('click', handleContactsListClick);
     contactsList.dataset.bound = 'true';
   }
+
+  bindSecurityPanel();
 }
 
 function bindClick(id, handler) {
@@ -183,12 +363,137 @@ function bindClick(id, handler) {
   element.dataset.bound = 'true';
 }
 
+function bindSecurityPanel() {
+  const panel = document.getElementById('cardSecurity');
+  if (!panel || panel.dataset.bound === 'true') return;
+
+  panel.addEventListener('input', handleSecurityPanelInput);
+  panel.addEventListener('change', handleSecurityPanelChange);
+  panel.addEventListener('click', handleSecurityPanelClick);
+  panel.dataset.bound = 'true';
+}
+
+function handleSecurityPanelInput(event) {
+  const target = event.target;
+  if (!target || !target.id) return;
+
+  if (target.id === 'securityOwnerInput') {
+    state.security.owner = target.value.trim();
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityDesignNotesInput') {
+    state.security.designReviewNotes = target.value.trim();
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityIntegrationNotesInput') {
+    state.security.integrationNotes = target.value.trim();
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+  }
+}
+
+function handleSecurityPanelChange(event) {
+  const target = event.target;
+  if (!target) return;
+
+  if (target.matches('[data-security-toggle][data-security-id]')) {
+    const group = target.getAttribute('data-security-toggle');
+    const itemId = target.getAttribute('data-security-id');
+    const reviewMap = getSecurityReviewMap(group);
+    if (!reviewMap || !itemId) return;
+
+    reviewMap[itemId] = Boolean(target.checked);
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityChecklists();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityReviewDateInput') {
+    state.security.reviewDate = target.value.trim();
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityScopeSelect') {
+    state.security.scope = target.value;
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityExposureSelect') {
+    state.security.exposure = target.value;
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityDataSelect') {
+    state.security.dataSensitivity = target.value;
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityIntegrationSelect') {
+    state.security.integrationCriticality = target.value;
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securitySurfaceSelect') {
+    state.security.attackSurface = target.value;
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+  }
+}
+
+function handleSecurityPanelClick(event) {
+  const trigger = event.target.closest('button');
+  if (!trigger) return;
+
+  if (trigger.id === 'runSecurityReviewBtn') {
+    runSecurityReview();
+    return;
+  }
+
+  if (trigger.id === 'securitySnapshotBtn') {
+    renderSecurityModule();
+    persistSettings();
+    showToast('Security assessment snapshot refreshed.', 'teal');
+    logEvent({
+      title: 'Security snapshot refreshed',
+      detail: 'Security requirements, testing results, and integration posture were refreshed.',
+      icon: 'fas fa-check-circle',
+      accent: '#198A73',
+    });
+  }
+}
+
 async function handleDeviceLogin(event) {
   event.preventDefault();
 
   const nameInput = document.getElementById('authNameInput');
   const emailInput = document.getElementById('authEmailInput');
-  const accessCodeInput = document.getElementById('authAccessCodeInput');
   const rememberInput = document.getElementById('authRememberInput');
   const honeypotInput = document.getElementById('authWebsiteInput');
   const submitBtn = document.getElementById('authSubmitBtn');
@@ -201,7 +506,6 @@ async function handleDeviceLogin(event) {
 
   const name = nameInput ? nameInput.value.trim() : '';
   const email = emailInput ? emailInput.value.trim().toLowerCase() : '';
-  const accessCode = accessCodeInput ? accessCodeInput.value.trim() : '';
   const remember = Boolean(rememberInput && rememberInput.checked);
 
   if (!name) {
@@ -216,12 +520,6 @@ async function handleDeviceLogin(event) {
     return;
   }
 
-  if (!accessCode) {
-    setAuthStatus('Enter the access code.', 'error');
-    if (accessCodeInput) accessCodeInput.focus();
-    return;
-  }
-
   if (submitBtn) submitBtn.disabled = true;
   setAuthStatus('Signing in securely...', '');
 
@@ -231,23 +529,45 @@ async function handleDeviceLogin(event) {
       body: {
         name,
         email,
-        accessCode,
         remember,
         honeypot: honeypotValue,
       },
     });
 
+    if (!isValidSessionPayload(session)) {
+      throw new Error('Local session endpoint returned an invalid response.');
+    }
+
     applyServerSession(session);
+    if (isLocalDevelopmentHost()) {
+      persistLocalDevelopmentSession(session);
+    }
     await restoreProtectedState();
     setAuthStatus(remember ? 'Secure device session saved.' : 'Secure session opened.', 'success');
     unlockWearGuard({ silent: true });
     showToast(remember ? 'Secure session saved for this device.' : 'Secure session opened.', 'teal');
   } catch (error) {
+    if (isLocalDevelopmentHost() && shouldUseLocalDevelopmentSession(error)) {
+      const session = createLocalDevelopmentSession({ name, email }, remember);
+      persistLocalDevelopmentSession(session);
+      applyServerSession(session);
+      await restoreProtectedState();
+      setAuthStatus(remember ? 'Local dev session saved.' : 'Local dev session opened.', 'success');
+      unlockWearGuard({ silent: true });
+      showToast(remember ? 'Local dev session saved for this device.' : 'Local dev session opened.', 'teal');
+      logEvent({
+        title: 'Local development access granted',
+        detail: remember ? `${name} opened a remembered localhost development session.` : `${name} opened a session-only localhost development session.`,
+        icon: 'fas fa-user-shield',
+        accent: '#198A73',
+      });
+      return;
+    }
+
     setAuthStatus(error.message || 'Secure sign-in failed.', 'error');
     return;
   } finally {
     if (submitBtn) submitBtn.disabled = false;
-    if (accessCodeInput) accessCodeInput.value = '';
   }
 
   logEvent({
@@ -292,7 +612,7 @@ async function forgetTrustedDevice() {
   showToast('Secure session cleared. Sign in again to continue.', 'amber');
   logEvent({
     title: 'Secure session removed',
-    detail: 'WearGuard will ask for the access code again on this browser.',
+    detail: 'WearGuard will ask you to sign in again on this browser.',
     icon: 'fas fa-rotate-left',
     accent: '#F0A03A',
   });
@@ -335,7 +655,7 @@ function updateDeviceAccessUi() {
   }
 
   title.textContent = 'No secure session is active.';
-  text.textContent = 'Sign in with the access code and keep remember enabled if you want the server to restore this browser session next time.';
+  text.textContent = 'Sign in and keep remember enabled if you want the server to restore this browser session next time.';
   forgetBtn.disabled = true;
 }
 
@@ -352,13 +672,11 @@ function setAuthStatus(message, tone) {
 function clearAuthForm() {
   const nameInput = document.getElementById('authNameInput');
   const emailInput = document.getElementById('authEmailInput');
-  const accessCodeInput = document.getElementById('authAccessCodeInput');
   const rememberInput = document.getElementById('authRememberInput');
   const honeypotInput = document.getElementById('authWebsiteInput');
 
   if (nameInput) nameInput.value = '';
   if (emailInput) emailInput.value = '';
-  if (accessCodeInput) accessCodeInput.value = '';
   if (rememberInput) rememberInput.checked = true;
   if (honeypotInput) honeypotInput.value = '';
 }
@@ -378,6 +696,108 @@ function normalizeAuthProfile(value) {
 function setStorageKey(key) {
   state.storageKey = String(key || '');
   state.storageCryptoKeyPromise = null;
+}
+
+function isLocalDevelopmentHost() {
+  if (window.location.protocol === 'file:') return true;
+
+  if (window.location.protocol === 'http:' && window.location.port) {
+    return true;
+  }
+
+  const host = String(window.location.hostname || '').toLowerCase();
+  if (!host) return true;
+  if (host === 'localhost' || host === '0.0.0.0' || host === '[::1]' || host.endsWith('.local') || host.endsWith('.localhost')) {
+    return true;
+  }
+
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+
+  return false;
+}
+
+function shouldUseLocalDevelopmentSession(error) {
+  if (!error) return true;
+  if (error.message === 'Local session endpoint returned an invalid response.') return true;
+  if (!error.status) return true;
+
+  const hasExplicitServerMessage = Boolean(error.payload && error.payload.error);
+  if (hasExplicitServerMessage && [400, 401, 403].includes(error.status)) {
+    return false;
+  }
+
+  if (!hasExplicitServerMessage && error.message === 'Request failed.') {
+    return true;
+  }
+
+  return error.status === 404 || error.status === 405 || error.status >= 500;
+}
+
+function isValidSessionPayload(payload) {
+  return Boolean(
+    normalizeAuthProfile(payload && payload.profile) &&
+    payload &&
+    typeof payload.storageKey === 'string' &&
+    payload.storageKey
+  );
+}
+
+function createLocalDevelopmentSession(profile, remember) {
+  const normalizedProfile = normalizeAuthProfile(profile);
+  if (!normalizedProfile) return null;
+
+  return {
+    ok: true,
+    authenticated: true,
+    profile: normalizedProfile,
+    remembered: Boolean(remember),
+    storageKey: `wearguard-local-dev:${normalizedProfile.email}`,
+    localDevelopment: true,
+  };
+}
+
+function persistLocalDevelopmentSession(sessionPayload) {
+  if (!sessionPayload || !sessionPayload.profile) return;
+
+  const storage = sessionPayload.remembered ? localStorage : sessionStorage;
+  const otherStorage = sessionPayload.remembered ? sessionStorage : localStorage;
+
+  try {
+    storage.setItem(DEV_LOCAL_SESSION_KEY, JSON.stringify(sessionPayload));
+    otherStorage.removeItem(DEV_LOCAL_SESSION_KEY);
+  } catch (error) {
+    // Ignore storage failures and keep the current in-memory session.
+  }
+}
+
+function readLocalDevelopmentSession() {
+  try {
+    const localValue = localStorage.getItem(DEV_LOCAL_SESSION_KEY);
+    if (localValue) return JSON.parse(localValue);
+  } catch (error) {
+    // Ignore parse issues and fall back to session storage.
+  }
+
+  try {
+    const sessionValue = sessionStorage.getItem(DEV_LOCAL_SESSION_KEY);
+    if (sessionValue) return JSON.parse(sessionValue);
+  } catch (error) {
+    // Ignore parse issues for local development fallback.
+  }
+
+  return null;
+}
+
+function clearLocalDevelopmentSession() {
+  try {
+    localStorage.removeItem(DEV_LOCAL_SESSION_KEY);
+    sessionStorage.removeItem(DEV_LOCAL_SESSION_KEY);
+  } catch (error) {
+    // Ignore cleanup failures for local development fallback.
+  }
 }
 
 function applyServerSession(payload) {
@@ -444,9 +864,23 @@ async function apiRequest(url, options) {
 async function restoreServerSession() {
   try {
     const session = await apiRequest(SESSION_ENDPOINT, { method: 'GET' });
+    if (!isValidSessionPayload(session)) {
+      throw new Error('Local session endpoint returned an invalid response.');
+    }
     applyServerSession(session);
+    if (isLocalDevelopmentHost()) {
+      persistLocalDevelopmentSession(session);
+    }
     return Boolean(state.authProfile && state.storageKey);
   } catch (error) {
+    if (isLocalDevelopmentHost()) {
+      const localSession = readLocalDevelopmentSession();
+      if (localSession) {
+        applyServerSession(localSession);
+        return Boolean(state.authProfile && state.storageKey);
+      }
+    }
+
     clearServerSessionState();
     return false;
   }
@@ -459,6 +893,7 @@ async function clearServerSession() {
     // Ignore delete failures and still clear the local runtime state.
   }
 
+  clearLocalDevelopmentSession();
   clearServerSessionState();
 }
 
@@ -546,6 +981,7 @@ function clearProtectedRuntimeState() {
   state.voiceInterim = '';
   state.alertActive = false;
   state.lastLocation = null;
+  state.security = createDefaultSecurityState();
   state.wearable.connectedDevice = null;
   state.wearable.lastPairedDevice = null;
   state.wearable.batteryLevel = null;
@@ -566,6 +1002,7 @@ async function restoreProtectedState() {
     state.contacts = Array.isArray(savedSettings.contacts)
       ? savedSettings.contacts.map(normalizeContact).filter(Boolean)
       : [];
+    state.security = normalizeSecurityState(savedSettings.security);
   }
 
   if (state.contacts.length && !state.contacts.some((contact) => contact.primary)) {
@@ -1230,6 +1667,7 @@ async function persistSettings() {
   await writeProtectedStorage(STORAGE_KEY, {
     codeWord: state.codeWord,
     contacts: state.contacts,
+    security: state.security,
   });
 }
 
@@ -1263,6 +1701,726 @@ function removeAutoAddedEmergencyContact() {
   if (state.contacts.length !== before) {
     persistSettings();
   }
+}
+
+function getSecurityReviewMap(group) {
+  if (group === 'threat') return state.security.threatReviews;
+  if (group === 'coding') return state.security.secureCodingReviews;
+  if (group === 'integration') return state.security.integrationReviews;
+  return null;
+}
+
+function syncInputValue(id, value) {
+  const element = document.getElementById(id);
+  if (!element) return;
+
+  const normalizedValue = value == null ? '' : String(value);
+  if (document.activeElement === element) return;
+  if (element.value !== normalizedValue) {
+    element.value = normalizedValue;
+  }
+}
+
+function setTextContent(id, value) {
+  const element = document.getElementById(id);
+  if (!element) return;
+
+  const normalizedValue = value == null ? '' : String(value);
+  if (element.textContent !== normalizedValue) {
+    element.textContent = normalizedValue;
+  }
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function countCheckedValues(map) {
+  return Object.values(map || {}).filter(Boolean).length;
+}
+
+function getSecurityScaleMeta(value) {
+  return SECURITY_SCALE[value] || SECURITY_SCALE.moderate;
+}
+
+function formatSecurityDate(value) {
+  if (!value) return 'Not set';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Not set';
+  return date.toLocaleDateString('en-ZA', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatSecurityDateTime(value) {
+  if (!value) return 'Not run';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Not run';
+  return date.toLocaleString('en-ZA', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function isLocalDevelopmentSessionActive() {
+  return Boolean(state.storageKey && state.storageKey.startsWith('wearguard-local-dev:'));
+}
+
+function getPrimaryContact() {
+  return state.contacts.find((contact) => contact.primary) || state.contacts[0] || null;
+}
+
+function computeSecurityRiskProfile() {
+  const weightedSum =
+    getSecurityScaleMeta(state.security.exposure).weight +
+    getSecurityScaleMeta(state.security.dataSensitivity).weight +
+    getSecurityScaleMeta(state.security.integrationCriticality).weight +
+    getSecurityScaleMeta(state.security.attackSurface).weight +
+    (state.security.scope === 'production' ? 1 : state.security.scope === 'prototype' ? -1 : 0);
+
+  const score = clampNumber(Math.round(((weightedSum - 3) / 14) * 100), 0, 100);
+  let level = 'Low';
+
+  if (score >= 80) {
+    level = 'Critical';
+  } else if (score >= 60) {
+    level = 'High';
+  } else if (score >= 35) {
+    level = 'Moderate';
+  }
+
+  const scopeLabel = state.security.scope === 'production'
+    ? 'production'
+    : state.security.scope === 'prototype'
+      ? 'prototype'
+      : 'pilot';
+
+  return {
+    score,
+    level,
+    text: `${scopeLabel[0].toUpperCase()}${scopeLabel.slice(1)} scope with ${level.toLowerCase()} inherent risk pressure.`,
+  };
+}
+
+function getSecurityAutoControls() {
+  const hasSecureSession = Boolean(state.authProfile && state.storageKey);
+  const hasCrypto = Boolean(window.crypto && window.crypto.subtle);
+  const localDevSession = isLocalDevelopmentSessionActive();
+  const secureContext = Boolean(window.isSecureContext);
+
+  return [
+    {
+      id: 'sessionBoundary',
+      title: 'Session boundary',
+      status: hasSecureSession ? (localDevSession ? 'warn' : 'pass') : 'warn',
+      detail: hasSecureSession
+        ? localDevSession
+          ? 'A local-development session is active. Use real server-backed authentication for production demonstrations.'
+          : 'A session-backed access path is active for this browser.'
+        : 'Sign in before validating session-backed storage and access controls.',
+    },
+    {
+      id: 'protectedStorage',
+      title: 'Protected storage',
+      status: hasCrypto ? (hasSecureSession ? 'pass' : 'warn') : 'fail',
+      detail: hasCrypto
+        ? hasSecureSession
+          ? 'Sensitive settings can be encrypted against the active session storage key.'
+          : 'Web Crypto is available, but protected browser storage is only useful after a session is established.'
+        : 'Web Crypto is unavailable, so encrypted browser storage cannot be enforced here.',
+    },
+    {
+      id: 'secureOrigin',
+      title: 'Secure origin for sensors',
+      status: secureContext ? 'pass' : isLocalDevelopmentHost() ? 'warn' : 'fail',
+      detail: secureContext
+        ? 'Sensitive browser APIs can use a secure origin and permission model.'
+        : isLocalDevelopmentHost()
+          ? 'Local development is allowed, but production deployment should use HTTPS for Bluetooth and secure cookies.'
+          : 'A non-secure origin weakens cookies, Bluetooth, and permission-sensitive features.',
+    },
+    {
+      id: 'safeRendering',
+      title: 'Safe DOM rendering path',
+      status: 'pass',
+      detail: 'Contacts, activity events, and assessment findings render through DOM APIs instead of raw HTML injection.',
+    },
+    {
+      id: 'permissionBoundary',
+      title: 'Permission boundary',
+      status: (navigator.geolocation || navigator.bluetooth || state.voiceSupported) ? 'pass' : 'warn',
+      detail: 'Bluetooth, microphone, and location flows still require explicit browser permission prompts.',
+    },
+  ];
+}
+
+function getSecurityIntegrationStatuses() {
+  const hasSecureSession = Boolean(state.authProfile && state.storageKey);
+  const primaryContact = getPrimaryContact();
+  const hasCrypto = Boolean(window.crypto && window.crypto.subtle);
+  const secureContext = Boolean(window.isSecureContext);
+  const localDev = isLocalDevelopmentHost() || isLocalDevelopmentSessionActive();
+
+  return [
+    {
+      title: 'Session flow',
+      status: hasSecureSession ? (isLocalDevelopmentSessionActive() ? 'warn' : 'pass') : 'warn',
+      detail: hasSecureSession
+        ? isLocalDevelopmentSessionActive()
+          ? 'Local-development auth fallback is active and should be removed or disabled before production.'
+          : 'Session state is available for protected features and review storage.'
+        : 'No authenticated session is active right now.',
+    },
+    {
+      title: 'Wearable pairing',
+      status: canUseBrowserBluetooth() ? 'pass' : 'warn',
+      detail: canUseBrowserBluetooth()
+        ? 'Bluetooth pairing can use a secure browser context when a real wearable is available.'
+        : 'This runtime may fall back to demo wearables or lacks the secure context required for real Bluetooth pairing.',
+    },
+    {
+      title: 'Alert delivery',
+      status: primaryContact ? 'warn' : 'fail',
+      detail: primaryContact
+        ? 'Emergency routing has a primary recipient, but production still needs authenticated relay and delivery ownership.'
+        : 'No primary contact is configured, so emergency delivery is not operational yet.',
+    },
+    {
+      title: 'Protected data',
+      status: hasCrypto ? (hasSecureSession ? 'pass' : 'warn') : 'fail',
+      detail: hasCrypto
+        ? hasSecureSession
+          ? 'Browser storage can be tied to the current session key.'
+          : 'Storage protection is available but idle until a session is present.'
+        : 'Protected storage support is missing in this environment.',
+    },
+    {
+      title: 'Deployment mode',
+      status: localDev ? 'warn' : 'pass',
+      detail: localDev
+        ? 'Local-development allowances are visible. Re-test under the final HTTPS deployment before sign-off.'
+        : 'The runtime is closer to a real deployment posture than a localhost demo.',
+    },
+    {
+      title: 'Permission journeys',
+      status: secureContext ? 'pass' : 'warn',
+      detail: 'Bluetooth, microphone, and location prompts should be verified on the target browsers and devices.',
+    },
+  ];
+}
+
+function getSecurityRequirementCards() {
+  const autoControls = getSecurityAutoControls();
+  const autoPassCount = autoControls.filter((control) => control.status === 'pass').length;
+  const threatReviewed = countCheckedValues(state.security.threatReviews);
+  const secureCodingReviewed = countCheckedValues(state.security.secureCodingReviews);
+  const integrationReviewed = countCheckedValues(state.security.integrationReviews);
+  const testingComplete = state.security.testing.lastRunAt ? 1 : 0;
+  const testingHealthy = state.security.testing.lastRunAt && state.security.testing.failCount === 0 ? 1 : 0;
+
+  return [
+    {
+      title: 'Risk Assessment',
+      completed: [
+        state.security.owner,
+        state.security.reviewDate,
+        state.security.scope,
+        state.security.exposure,
+        state.security.dataSensitivity,
+        state.security.integrationCriticality,
+        state.security.attackSurface,
+      ].filter(Boolean).length,
+      total: 7,
+    },
+    {
+      title: 'Threat Modelling',
+      completed: threatReviewed + (state.security.designReviewNotes ? 1 : 0),
+      total: SECURITY_THREAT_CATALOG.length + 1,
+    },
+    {
+      title: 'Secure Development',
+      completed: secureCodingReviewed + autoPassCount,
+      total: SECURITY_CODING_REVIEW_ITEMS.length + autoControls.length,
+    },
+    {
+      title: 'Security Testing',
+      completed: testingComplete + testingHealthy,
+      total: 2,
+    },
+    {
+      title: 'Secure Integration',
+      completed: integrationReviewed + (state.security.integrationNotes ? 1 : 0),
+      total: SECURITY_INTEGRATION_REVIEW_ITEMS.length + 1,
+    },
+  ].map((card) => {
+    const ratio = card.total ? card.completed / card.total : 0;
+    const tone = ratio >= 1 ? 'pass' : ratio >= 0.55 ? 'warn' : 'fail';
+    return {
+      ...card,
+      ratio,
+      tone,
+      meta: `${card.completed}/${card.total} complete`,
+    };
+  });
+}
+
+function getSecurityReadinessSnapshot() {
+  const risk = computeSecurityRiskProfile();
+  const cards = getSecurityRequirementCards();
+  const autoControls = getSecurityAutoControls();
+  const integrationStatuses = getSecurityIntegrationStatuses();
+  const totalCompleted = cards.reduce((sum, card) => sum + card.completed, 0);
+  const totalPossible = cards.reduce((sum, card) => sum + card.total, 0);
+  const coverageRatio = totalPossible ? totalCompleted / totalPossible : 0;
+  const coveragePercent = Math.round(coverageRatio * 100);
+  const autoPassRatio = autoControls.length
+    ? autoControls.filter((control) => control.status === 'pass').length / autoControls.length
+    : 0;
+
+  const findingTotal = state.security.testing.passCount + state.security.testing.warnCount + state.security.testing.failCount;
+  const testingRatio = state.security.testing.lastRunAt
+    ? clampNumber(
+        (
+          state.security.testing.passCount +
+          (state.security.testing.warnCount * 0.55) -
+          (state.security.testing.failCount * 0.4)
+        ) / Math.max(1, findingTotal),
+        0,
+        1
+      )
+    : 0.25;
+
+  const readiness = clampNumber(
+    Math.round((coverageRatio * 58) + (autoPassRatio * 24) + (testingRatio * 18) - ((risk.score / 100) * 16)),
+    0,
+    100
+  );
+
+  let tone = 'risk';
+  let label = 'Baseline';
+  let text = 'The platform still needs structured review and test evidence before it can claim a mature security posture.';
+
+  if (readiness >= 80) {
+    tone = 'strong';
+    label = 'Strong';
+    text = 'Security requirements are well-covered. The remaining work is mostly targeted follow-up before rollout.';
+  } else if (readiness >= 60) {
+    tone = 'progressing';
+    label = 'Progressing';
+    text = 'The platform has meaningful security controls, but a few review and deployment gaps still need attention.';
+  } else if (readiness >= 40) {
+    tone = 'attention';
+    label = 'Needs work';
+    text = 'The platform has partial controls in place, but more evidence is needed before it should be treated as deployment-ready.';
+  }
+
+  return {
+    risk,
+    cards,
+    autoControls,
+    integrationStatuses,
+    coveragePercent,
+    readiness,
+    tone,
+    label,
+    text,
+  };
+}
+
+function buildSecurityAssessmentSummary(snapshot) {
+  const openThreats = SECURITY_THREAT_CATALOG
+    .filter((item) => !state.security.threatReviews[item.id])
+    .map((item) => item.title.toLowerCase());
+
+  const lines = [
+    `${snapshot.label} readiness (${snapshot.readiness}/100) for a ${state.security.scope} release. Inherent risk is ${snapshot.risk.level.toLowerCase()} based on exposure, data sensitivity, integration criticality, and attack surface.`,
+    `${snapshot.coveragePercent}% of the embedded security requirements are documented. ${countCheckedValues(state.security.threatReviews)} of ${SECURITY_THREAT_CATALOG.length} threat scenarios are reviewed, and ${countCheckedValues(state.security.integrationReviews)} of ${SECURITY_INTEGRATION_REVIEW_ITEMS.length} integration controls are signed off.`,
+  ];
+
+  if (state.security.testing.lastRunAt) {
+    lines.push(`Latest quick review: ${state.security.testing.passCount} pass, ${state.security.testing.warnCount} warn, ${state.security.testing.failCount} fail on ${formatSecurityDateTime(state.security.testing.lastRunAt)}.`);
+  } else {
+    lines.push('No quick security review has been run yet in this session.');
+  }
+
+  if (isLocalDevelopmentHost() || isLocalDevelopmentSessionActive()) {
+    lines.push('Local-development allowances are still visible. Re-test under the final HTTPS deployment before presenting this posture as production-ready.');
+  }
+
+  if (openThreats.length) {
+    lines.push(`Priority focus: ${openThreats.slice(0, 2).join('; ')}.`);
+  }
+
+  return lines.join('\n\n');
+}
+
+function renderSecurityModule() {
+  renderSecurityOverview();
+  renderSecurityChecklists();
+  renderSecurityTesting();
+  renderSecurityAssessmentSummary();
+}
+
+function renderSecurityOverview() {
+  syncInputValue('securityOwnerInput', state.security.owner);
+  syncInputValue('securityReviewDateInput', state.security.reviewDate);
+  syncInputValue('securityScopeSelect', state.security.scope);
+  syncInputValue('securityExposureSelect', state.security.exposure);
+  syncInputValue('securityDataSelect', state.security.dataSensitivity);
+  syncInputValue('securityIntegrationSelect', state.security.integrationCriticality);
+  syncInputValue('securitySurfaceSelect', state.security.attackSurface);
+  syncInputValue('securityDesignNotesInput', state.security.designReviewNotes);
+  syncInputValue('securityIntegrationNotesInput', state.security.integrationNotes);
+
+  const snapshot = getSecurityReadinessSnapshot();
+  const badge = document.getElementById('securityReadinessBadge');
+
+  setTextContent('securityReadinessScore', String(snapshot.readiness));
+  setTextContent('securityReadinessBadge', snapshot.label);
+  setTextContent('securityReadinessText', snapshot.text);
+  setTextContent('securityRiskLevel', `${snapshot.risk.level} risk`);
+  setTextContent('securityCoverageValue', `${snapshot.coveragePercent}%`);
+  setTextContent('securityLastTestValue', state.security.testing.lastRunAt ? formatSecurityDateTime(state.security.testing.lastRunAt) : 'Not run');
+
+  if (badge) {
+    badge.className = `security-score-badge ${snapshot.tone}`;
+  }
+
+  renderSecurityRequirementCards(snapshot.cards);
+}
+
+function renderSecurityRequirementCards(cards) {
+  const grid = document.getElementById('securityRequirementGrid');
+  if (!grid) return;
+
+  grid.replaceChildren();
+  cards.forEach((card) => {
+    const item = document.createElement('div');
+    item.className = `security-requirement-card ${card.tone}`;
+
+    const title = document.createElement('div');
+    title.className = 'security-requirement-title';
+    title.textContent = card.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'security-requirement-meta';
+    meta.textContent = card.meta;
+
+    item.appendChild(title);
+    item.appendChild(meta);
+    grid.appendChild(item);
+  });
+}
+
+function renderSecurityChecklists() {
+  renderSecurityChecklist('securityThreatChecklist', SECURITY_THREAT_CATALOG, state.security.threatReviews, 'threat');
+  renderSecurityChecklist('securityCodingChecklist', SECURITY_CODING_REVIEW_ITEMS, state.security.secureCodingReviews, 'coding');
+  renderSecurityChecklist('securityIntegrationChecklist', SECURITY_INTEGRATION_REVIEW_ITEMS, state.security.integrationReviews, 'integration');
+  renderSecurityAutoControls();
+  renderSecurityIntegrationGrid();
+}
+
+function renderSecurityChecklist(containerId, items, values, group) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  container.replaceChildren();
+  items.forEach((item) => {
+    const label = document.createElement('label');
+    label.className = 'security-check';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = Boolean(values[item.id]);
+    input.setAttribute('data-security-toggle', group);
+    input.setAttribute('data-security-id', item.id);
+
+    const body = document.createElement('div');
+    body.className = 'security-check-body';
+
+    const title = document.createElement('div');
+    title.className = 'security-check-title';
+    title.textContent = item.title;
+
+    const detail = document.createElement('div');
+    detail.className = 'security-check-copy';
+    detail.textContent = item.detail;
+
+    body.appendChild(title);
+    body.appendChild(detail);
+
+    if (item.mitigation) {
+      const mitigation = document.createElement('div');
+      mitigation.className = 'security-check-copy subtle';
+      mitigation.textContent = `Mitigation focus: ${item.mitigation}`;
+      body.appendChild(mitigation);
+    }
+
+    label.appendChild(input);
+    label.appendChild(body);
+    container.appendChild(label);
+  });
+}
+
+function renderSecurityAutoControls() {
+  const container = document.getElementById('securityAutoControlList');
+  if (!container) return;
+
+  container.replaceChildren();
+  getSecurityAutoControls().forEach((control) => {
+    const card = document.createElement('div');
+    card.className = `security-control ${control.status}`;
+
+    const head = document.createElement('div');
+    head.className = 'security-control-head';
+
+    const title = document.createElement('div');
+    title.className = 'security-control-title';
+    title.textContent = control.title;
+
+    const pill = document.createElement('span');
+    pill.className = `security-status-pill ${control.status}`;
+    pill.textContent = control.status === 'pass' ? 'Pass' : control.status === 'warn' ? 'Watch' : 'Fail';
+
+    const copy = document.createElement('div');
+    copy.className = 'security-control-copy';
+    copy.textContent = control.detail;
+
+    head.appendChild(title);
+    head.appendChild(pill);
+    card.appendChild(head);
+    card.appendChild(copy);
+    container.appendChild(card);
+  });
+}
+
+function renderSecurityIntegrationGrid() {
+  const container = document.getElementById('securityIntegrationGrid');
+  if (!container) return;
+
+  container.replaceChildren();
+  getSecurityIntegrationStatuses().forEach((status) => {
+    const card = document.createElement('div');
+    card.className = `security-control-card ${status.status}`;
+
+    const title = document.createElement('div');
+    title.className = 'security-control-title';
+    title.textContent = status.title;
+
+    const copy = document.createElement('div');
+    copy.className = 'security-control-copy';
+    copy.textContent = status.detail;
+
+    card.appendChild(title);
+    card.appendChild(copy);
+    container.appendChild(card);
+  });
+}
+
+function renderSecurityTesting() {
+  const findingsWrap = document.getElementById('securityFindingList');
+  const meta = document.getElementById('securityTestMeta');
+  if (!findingsWrap || !meta) return;
+
+  if (state.security.testing.lastRunAt) {
+    meta.textContent = `Last quick review: ${formatSecurityDateTime(state.security.testing.lastRunAt)} - ${state.security.testing.passCount} pass, ${state.security.testing.warnCount} warn, ${state.security.testing.failCount} fail.`;
+  } else {
+    meta.textContent = 'No security review has been run yet in this session.';
+  }
+
+  findingsWrap.replaceChildren();
+  if (!state.security.testing.findings.length) {
+    const empty = document.createElement('div');
+    empty.className = 'security-control';
+    empty.textContent = 'Run the quick security review to generate findings from the current runtime and configuration.';
+    findingsWrap.appendChild(empty);
+    return;
+  }
+
+  state.security.testing.findings.forEach((finding) => {
+    const card = document.createElement('div');
+    card.className = `security-finding ${finding.status}`;
+
+    const title = document.createElement('div');
+    title.className = 'security-finding-title';
+    title.textContent = finding.title;
+
+    const detail = document.createElement('div');
+    detail.className = 'security-finding-detail';
+    detail.textContent = finding.detail;
+
+    card.appendChild(title);
+    card.appendChild(detail);
+    findingsWrap.appendChild(card);
+  });
+}
+
+function renderSecurityAssessmentSummary() {
+  setTextContent('securityAssessmentSummary', buildSecurityAssessmentSummary(getSecurityReadinessSnapshot()));
+}
+
+function runSecurityReview() {
+  const findings = [];
+  const primaryContact = getPrimaryContact();
+  const threatReviewed = countCheckedValues(state.security.threatReviews);
+  const codingReviewed = countCheckedValues(state.security.secureCodingReviews);
+  const integrationReviewed = countCheckedValues(state.security.integrationReviews);
+  const hasSecureSession = Boolean(state.authProfile && state.storageKey);
+
+  if (hasSecureSession && !isLocalDevelopmentSessionActive()) {
+    findings.push({
+      status: 'pass',
+      title: 'Session control is active',
+      detail: 'A session-backed access path is active and the current browser can use protected storage.',
+    });
+  } else if (hasSecureSession) {
+    findings.push({
+      status: 'warn',
+      title: 'Local-development session bypass is active',
+      detail: 'The current login flow still allows a localhost fallback. Remove or disable it before production use.',
+    });
+  } else {
+    findings.push({
+      status: 'fail',
+      title: 'No authenticated session is active',
+      detail: 'Run this review after sign-in so session-backed controls and protected storage can be assessed properly.',
+    });
+  }
+
+  if (window.crypto && window.crypto.subtle) {
+    findings.push({
+      status: hasSecureSession ? 'pass' : 'warn',
+      title: 'Protected browser storage is available',
+      detail: hasSecureSession
+        ? 'Web Crypto is available and sensitive settings can be tied to the current session key.'
+        : 'Web Crypto is present, but an authenticated session is still needed before protection is meaningful.',
+    });
+  } else {
+    findings.push({
+      status: 'fail',
+      title: 'Protected storage support is missing',
+      detail: 'This browser runtime does not expose Web Crypto, so encrypted local storage cannot be enforced.',
+    });
+  }
+
+  if (window.isSecureContext) {
+    findings.push({
+      status: 'pass',
+      title: 'Sensitive APIs are running in a secure context',
+      detail: 'Bluetooth, cookies, and permission-sensitive browser features can use a secure origin.',
+    });
+  } else {
+    findings.push({
+      status: isLocalDevelopmentHost() ? 'warn' : 'fail',
+      title: 'Runtime is not using a secure origin',
+      detail: isLocalDevelopmentHost()
+        ? 'Local development is acceptable for demos, but the production platform should be tested under HTTPS.'
+        : 'A non-secure deployment weakens cookies, Bluetooth, and permission-sensitive features.',
+    });
+  }
+
+  if (threatReviewed === SECURITY_THREAT_CATALOG.length && state.security.designReviewNotes) {
+    findings.push({
+      status: 'pass',
+      title: 'Threat model review is documented',
+      detail: 'All embedded threat scenarios are acknowledged and design review notes are present.',
+    });
+  } else {
+    findings.push({
+      status: 'warn',
+      title: 'Threat modelling still has open items',
+      detail: `${threatReviewed}/${SECURITY_THREAT_CATALOG.length} threat scenarios are marked reviewed. Complete the remaining scenarios and capture design notes.`,
+    });
+  }
+
+  if (codingReviewed === SECURITY_CODING_REVIEW_ITEMS.length) {
+    findings.push({
+      status: 'pass',
+      title: 'Secure coding checklist is fully reviewed',
+      detail: 'The embedded secure-development checklist is complete for the current release candidate.',
+    });
+  } else {
+    findings.push({
+      status: 'warn',
+      title: 'Secure coding review needs more evidence',
+      detail: `${codingReviewed}/${SECURITY_CODING_REVIEW_ITEMS.length} secure-coding checkpoints are marked complete.`,
+    });
+  }
+
+  if (integrationReviewed === SECURITY_INTEGRATION_REVIEW_ITEMS.length && primaryContact) {
+    findings.push({
+      status: 'pass',
+      title: 'Integration readiness looks healthy',
+      detail: 'Integration review items are signed off and emergency routing has at least one primary recipient.',
+    });
+  } else if (primaryContact) {
+    findings.push({
+      status: 'warn',
+      title: 'Integration sign-off is incomplete',
+      detail: `${integrationReviewed}/${SECURITY_INTEGRATION_REVIEW_ITEMS.length} integration checkpoints are complete. Confirm relay, permissions, and retention decisions.`,
+    });
+  } else {
+    findings.push({
+      status: 'fail',
+      title: 'Emergency delivery is not operational yet',
+      detail: 'No primary contact is configured, so the integration path for real alerts is incomplete.',
+    });
+  }
+
+  if (state.codeWord) {
+    findings.push({
+      status: 'pass',
+      title: 'Private code word is configured',
+      detail: 'Safety AI has a private trigger phrase to distinguish routine conversation from a covert help request.',
+    });
+  } else {
+    findings.push({
+      status: 'warn',
+      title: 'No private code word is set',
+      detail: 'Configure a private code word so the platform can demonstrate a stronger covert-alert control.',
+    });
+  }
+
+  if (canUseBrowserBluetooth()) {
+    findings.push({
+      status: 'pass',
+      title: 'Wearable transport can use secure Bluetooth',
+      detail: 'This runtime is capable of real Bluetooth pairing inside a secure browser context.',
+    });
+  } else {
+    findings.push({
+      status: 'warn',
+      title: 'Wearable transport is running in demo or limited mode',
+      detail: 'Bluetooth either lacks a secure origin or is unavailable, so wearable trust should be re-tested on the target device.',
+    });
+  }
+
+  state.security.testing = {
+    lastRunAt: new Date().toISOString(),
+    findings,
+    passCount: findings.filter((finding) => finding.status === 'pass').length,
+    warnCount: findings.filter((finding) => finding.status === 'warn').length,
+    failCount: findings.filter((finding) => finding.status === 'fail').length,
+  };
+
+  persistSettings();
+  renderSecurityModule();
+
+  showToast(
+    state.security.testing.failCount
+      ? 'Quick security review finished with blocking findings.'
+      : 'Quick security review completed.',
+    state.security.testing.failCount ? 'amber' : 'teal'
+  );
+
+  logEvent({
+    title: 'Security review executed',
+    detail: `${state.security.testing.passCount} pass, ${state.security.testing.warnCount} warn, ${state.security.testing.failCount} fail recorded in the embedded security review.`,
+    icon: 'fas fa-check-circle',
+    accent: state.security.testing.failCount ? '#F0A03A' : '#198A73',
+  });
 }
 
 function sanitizePhoneNumber(value) {
@@ -2687,4 +3845,5 @@ function renderAll() {
   updateShareContactSelect();
   renderEvents();
   updateDeviceAccessUi();
+  renderSecurityModule();
 }

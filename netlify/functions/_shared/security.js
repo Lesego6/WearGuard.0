@@ -1,8 +1,39 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const COOKIE_NAME = 'wearguard_session';
 const REMEMBER_TTL_SECONDS = 60 * 60 * 24 * 30;
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
+
+loadDotEnv();
+
+function loadDotEnv() {
+  const envPath = path.resolve(__dirname, '..', '..', '..', '.env');
+  if (!fs.existsSync(envPath)) return;
+
+  const raw = fs.readFileSync(envPath, 'utf8');
+  raw.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+
+    const separator = trimmed.indexOf('=');
+    if (separator === -1) return;
+
+    const key = trimmed.slice(0, separator).trim();
+    let value = trimmed.slice(separator + 1).trim();
+    if (!key || Object.prototype.hasOwnProperty.call(process.env, key)) return;
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith('\'') && value.endsWith('\''))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
+  });
+}
 
 function json(statusCode, body, headers) {
   return {
@@ -36,10 +67,6 @@ function getRequiredEnv(name) {
 
 function getSessionSecret() {
   return getRequiredEnv('WEARGUARD_SESSION_SECRET');
-}
-
-function getAccessCode() {
-  return getRequiredEnv('WEARGUARD_ACCESS_CODE');
 }
 
 function getStorageSecret() {
@@ -221,7 +248,6 @@ module.exports = {
   constantTimeEqual,
   createSessionCookie,
   createSessionPayload,
-  getAccessCode,
   getEnv,
   getRequiredEnv,
   getSessionSecret,

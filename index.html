@@ -15,7 +15,7 @@
       <div class="auth-badge"><i class="fas fa-shield-halved"></i> Device Access</div>
       <h1 class="auth-title" id="authTitle">Sign in to WearGuard</h1>
       <p class="auth-copy">
-        Use your name, email, and access code to open a secure WearGuard session.
+        Use your name and email to open a secure WearGuard session.
         Keep <strong>Remember this device</strong> turned on if you want the server to keep
         this browser signed in between visits.
       </p>
@@ -30,10 +30,6 @@
             <input id="authEmailInput" type="email" autocomplete="email" placeholder="name@example.com" />
           </label>
         </div>
-        <label class="auth-field" for="authAccessCodeInput">
-          <span>Access code</span>
-          <input id="authAccessCodeInput" type="password" autocomplete="one-time-code" placeholder="Team access code" />
-        </label>
         <div class="hp-field" aria-hidden="true">
           <label for="authWebsiteInput">Website</label>
           <input id="authWebsiteInput" type="text" name="website" tabindex="-1" autocomplete="off" />
@@ -318,6 +314,158 @@
         <small>You can clear the trusted-device login at any time and require sign-in again on this browser.</small>
       </div>
 
+    </div>
+  </div>
+
+  <div class="section-card open" id="cardSecurity">
+    <div class="section-header" data-card-target="cardSecurity" role="button" tabindex="0" aria-expanded="true">
+      <div class="section-icon"><i class="fas fa-shield-halved"></i></div>
+      <div>
+        <div class="section-title">Security Assurance</div>
+        <div class="section-subtitle">Risk, threats, testing, secure integration</div>
+      </div>
+      <i class="fas fa-chevron-down section-chevron"></i>
+    </div>
+    <div class="section-body">
+      <div class="security-shell">
+        <div class="security-overview">
+          <div class="security-score-card">
+            <div class="security-kicker">Platform security readiness</div>
+            <div class="security-score-row">
+              <div class="security-score" id="securityReadinessScore">0</div>
+              <div class="security-score-badge" id="securityReadinessBadge">Baseline</div>
+            </div>
+            <p class="security-copy" id="securityReadinessText">
+              Build out the review fields below to turn the current platform posture into a structured security assessment.
+            </p>
+          </div>
+          <div class="security-meta-grid">
+            <div class="security-mini-card">
+              <div class="security-mini-label">Inherent risk</div>
+              <div class="security-mini-value" id="securityRiskLevel">Moderate</div>
+            </div>
+            <div class="security-mini-card">
+              <div class="security-mini-label">Coverage</div>
+              <div class="security-mini-value" id="securityCoverageValue">0%</div>
+            </div>
+            <div class="security-mini-card">
+              <div class="security-mini-label">Last test</div>
+              <div class="security-mini-value" id="securityLastTestValue">Not run</div>
+            </div>
+          </div>
+          <div class="security-card-grid" id="securityRequirementGrid" aria-live="polite"></div>
+        </div>
+
+        <div class="settings-section security-section">
+          <h4><i class="fas fa-user-shield"></i> Security Requirements</h4>
+          <div class="settings-row">
+            <label class="security-field" for="securityOwnerInput">
+              <span>Security owner</span>
+              <input id="securityOwnerInput" type="text" placeholder="Who owns this review?" />
+            </label>
+            <label class="security-field" for="securityReviewDateInput">
+              <span>Next review date</span>
+              <input id="securityReviewDateInput" type="date" />
+            </label>
+          </div>
+          <div class="settings-row">
+            <label class="security-field" for="securityScopeSelect">
+              <span>Deployment scope</span>
+              <select id="securityScopeSelect">
+                <option value="prototype">Prototype / demo</option>
+                <option value="pilot">Pilot / limited rollout</option>
+                <option value="production">Production / always-on safety service</option>
+              </select>
+            </label>
+          </div>
+          <small>Use this section to document who owns the assessment and what release stage the platform is entering.</small>
+        </div>
+
+        <div class="settings-section security-section">
+          <h4><i class="fas fa-triangle-exclamation"></i> Risk Assessment</h4>
+          <div class="security-select-grid">
+            <label class="security-field" for="securityExposureSelect">
+              <span>Exposure</span>
+              <select id="securityExposureSelect">
+                <option value="low">Low</option>
+                <option value="moderate">Moderate</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label class="security-field" for="securityDataSelect">
+              <span>Data sensitivity</span>
+              <select id="securityDataSelect">
+                <option value="low">Low</option>
+                <option value="moderate">Moderate</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label class="security-field" for="securityIntegrationSelect">
+              <span>Integration criticality</span>
+              <select id="securityIntegrationSelect">
+                <option value="low">Low</option>
+                <option value="moderate">Moderate</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label class="security-field" for="securitySurfaceSelect">
+              <span>Attack surface</span>
+              <select id="securitySurfaceSelect">
+                <option value="low">Low</option>
+                <option value="moderate">Moderate</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+          </div>
+          <small>These inputs drive the inherent-risk score and help explain why extra controls are needed before production rollout.</small>
+        </div>
+
+        <div class="settings-section security-section">
+          <h4><i class="fas fa-brain"></i> Threat Modelling & Design Review</h4>
+          <div class="security-checklist" id="securityThreatChecklist" aria-live="polite"></div>
+          <label class="security-field full" for="securityDesignNotesInput">
+            <span>Design review notes</span>
+            <textarea id="securityDesignNotesInput" rows="4" placeholder="Summarize trust boundaries, threat assumptions, abuse cases, and design decisions."></textarea>
+          </label>
+        </div>
+
+        <div class="settings-section security-section">
+          <h4><i class="fas fa-shield-halved"></i> Development (Secure Coding Practices)</h4>
+          <div class="security-control-list" id="securityAutoControlList" aria-live="polite"></div>
+          <div class="security-checklist" id="securityCodingChecklist" aria-live="polite"></div>
+        </div>
+
+        <div class="settings-section security-section">
+          <h4><i class="fas fa-check-circle"></i> Security Testing</h4>
+          <div class="wearable-actions security-actions">
+            <button class="mini-btn" id="runSecurityReviewBtn" type="button">
+              <i class="fas fa-check-circle"></i> Run quick security review
+            </button>
+            <button class="mini-btn secondary" id="securitySnapshotBtn" type="button">
+              <i class="fas fa-cloud-arrow-up"></i> Refresh assessment snapshot
+            </button>
+          </div>
+          <div class="security-inline-note" id="securityTestMeta">No security review has been run yet in this session.</div>
+          <div class="security-finding-list" id="securityFindingList" aria-live="polite"></div>
+        </div>
+
+        <div class="settings-section security-section">
+          <h4><i class="fas fa-cloud-arrow-up"></i> Assessment & Secure Integration</h4>
+          <div class="security-checklist" id="securityIntegrationChecklist" aria-live="polite"></div>
+          <div class="security-control-grid" id="securityIntegrationGrid" aria-live="polite"></div>
+          <label class="security-field full" for="securityIntegrationNotesInput">
+            <span>Integration notes</span>
+            <textarea id="securityIntegrationNotesInput" rows="4" placeholder="Capture deployment checks for sessions, permissions, webhook relay, storage, and operational monitoring."></textarea>
+          </label>
+          <div class="security-summary-box" id="securityAssessmentSummary">
+            Security assessment snapshots will appear here after the first render.
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

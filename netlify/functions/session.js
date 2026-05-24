@@ -1,9 +1,7 @@
 const {
   clearSessionCookie,
-  constantTimeEqual,
   createSessionCookie,
   createSessionPayload,
-  getAccessCode,
   isAllowedEmail,
   json,
   methodNotAllowed,
@@ -43,17 +41,6 @@ exports.handler = async (event) => {
     const profile = validateProfile(body);
     if (!profile) {
       return json(400, { ok: false, error: 'Enter a valid name and email address.' });
-    }
-
-    const accessCode = String(body.accessCode || '').trim();
-    if (!accessCode) {
-      return json(400, { ok: false, error: 'Enter the access code.' });
-    }
-
-    if (!constantTimeEqual(accessCode, getAccessCode())) {
-      return json(401, { ok: false, error: 'Access code was rejected.' }, {
-        'Set-Cookie': clearSessionCookie(),
-      });
     }
 
     if (!isAllowedEmail(profile.email)) {
