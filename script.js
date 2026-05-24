@@ -15,11 +15,6 @@ const state = {
   locationShareEndsAt: null,
   lastLocation: null,
   lastLocationSentAt: 0,
-  alertWebhookUrl: '',
-  locationWebhookUrl: '',
-  emailJsServiceId: 'service_8poulyg',
-  emailJsTemplateId: 'template_05wae3g',
-  emailJsPublicKey: 'atla3KOLVkfnvh387',
   recognition: null,
   voiceSupported: false,
   voiceListening: false,
@@ -318,11 +313,6 @@ function persistSettings() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       codeWord: state.codeWord,
       contacts: state.contacts,
-      alertWebhookUrl: state.alertWebhookUrl,
-      locationWebhookUrl: state.locationWebhookUrl,
-      emailJsServiceId: state.emailJsServiceId,
-      emailJsTemplateId: state.emailJsTemplateId,
-      emailJsPublicKey: state.emailJsPublicKey,
     }));
   } catch (error) {
     // Ignore storage failures and keep the session usable.
@@ -338,17 +328,6 @@ function restorePersistedSettings() {
       state.contacts = Array.isArray(saved.contacts)
         ? saved.contacts.map(normalizeContact).filter(Boolean)
         : [];
-      state.alertWebhookUrl = typeof saved.alertWebhookUrl === 'string' ? saved.alertWebhookUrl : '';
-      state.locationWebhookUrl = typeof saved.locationWebhookUrl === 'string' ? saved.locationWebhookUrl : '';
-      state.emailJsServiceId = typeof saved.emailJsServiceId === 'string' && saved.emailJsServiceId
-        ? saved.emailJsServiceId
-        : 'service_8poulyg';
-      state.emailJsTemplateId = typeof saved.emailJsTemplateId === 'string' && saved.emailJsTemplateId
-        ? saved.emailJsTemplateId
-        : 'template_05wae3g';
-      state.emailJsPublicKey = typeof saved.emailJsPublicKey === 'string' && saved.emailJsPublicKey && saved.emailJsPublicKey !== 'eAvmDhqeqF6LGBVPqE8Kd'
-        ? saved.emailJsPublicKey
-        : 'atla3KOLVkfnvh387';
     }
   } catch (error) {
     state.contacts = [];
@@ -359,17 +338,6 @@ function restorePersistedSettings() {
   }
 
   removeAutoAddedEmergencyContact();
-
-  const alertInput = document.getElementById('alertWebhookInput');
-  const locationInput = document.getElementById('locationWebhookInput');
-  const emailJsServiceInput = document.getElementById('emailJsServiceInput');
-  const emailJsTemplateInput = document.getElementById('emailJsTemplateInput');
-  const emailJsPublicKeyInput = document.getElementById('emailJsPublicKeyInput');
-  if (alertInput) alertInput.value = state.alertWebhookUrl;
-  if (locationInput) locationInput.value = state.locationWebhookUrl;
-  if (emailJsServiceInput) emailJsServiceInput.value = state.emailJsServiceId || 'service_8poulyg';
-  if (emailJsTemplateInput) emailJsTemplateInput.value = state.emailJsTemplateId;
-  if (emailJsPublicKeyInput) emailJsPublicKeyInput.value = state.emailJsPublicKey;
 }
 
 function normalizeContact(contact) {
@@ -402,31 +370,6 @@ function removeAutoAddedEmergencyContact() {
   if (state.contacts.length !== before) {
     persistSettings();
   }
-}
-
-function syncDeliveryConfigFromInputs() {
-  const alertInput = document.getElementById('alertWebhookInput');
-  const locationInput = document.getElementById('locationWebhookInput');
-  const emailJsServiceInput = document.getElementById('emailJsServiceInput');
-  const emailJsTemplateInput = document.getElementById('emailJsTemplateInput');
-  const emailJsPublicKeyInput = document.getElementById('emailJsPublicKeyInput');
-  state.alertWebhookUrl = alertInput ? alertInput.value.trim() : state.alertWebhookUrl;
-  state.locationWebhookUrl = locationInput ? locationInput.value.trim() : state.locationWebhookUrl;
-  state.emailJsServiceId = emailJsServiceInput ? (emailJsServiceInput.value.trim() || 'service_8poulyg') : state.emailJsServiceId;
-  state.emailJsTemplateId = emailJsTemplateInput ? emailJsTemplateInput.value.trim() : state.emailJsTemplateId;
-  state.emailJsPublicKey = emailJsPublicKeyInput ? emailJsPublicKeyInput.value.trim() : state.emailJsPublicKey;
-}
-
-function saveDeliveryConfig() {
-  syncDeliveryConfigFromInputs();
-  persistSettings();
-  showToast('Delivery endpoints saved.', 'teal');
-  logEvent({
-    title: 'Delivery settings saved',
-    detail: 'Webhook endpoints and EmailJS delivery settings were updated.',
-    icon: 'fas fa-tower-broadcast',
-    accent: '#198A73',
-  });
 }
 
 function sanitizePhoneNumber(value) {
@@ -573,67 +516,6 @@ async function postWebhook(url, payload) {
       body,
     });
     return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-function canUseEmailJs() {
-  return Boolean(state.emailJsServiceId && state.emailJsTemplateId && state.emailJsPublicKey);
-}
-
-function getEmailJsMissingFields() {
-  const missing = [];
-  if (!state.emailJsServiceId) missing.push('service ID');
-  if (!state.emailJsTemplateId) missing.push('template ID');
-  if (!state.emailJsPublicKey) missing.push('public key');
-  return missing;
-}
-
-function formatMissingFieldList(fields) {
-  if (!fields.length) return '';
-  if (fields.length === 1) return fields[0];
-  if (fields.length === 2) return `${fields[0]} and ${fields[1]}`;
-  return `${fields.slice(0, -1).join(', ')}, and ${fields[fields.length - 1]}`;
-}
-
-function isEmailJsPreferredForEmail(contact) {
-  return Boolean(contact && contact.email && state.emailJsServiceId);
-}
-
-function buildEmailJsTemplateParams(contact, subject, message, payload) {
-  const location = payload && payload.location ? payload.location : null;
-  return {
-    app_name: 'WearGuard',
-    to_name: contact && contact.name ? contact.name : 'Emergency Contact',
-    to_email: contact && contact.email ? contact.email : '',
-    subject,
-    message,
-    alert_type: payload && payload.type ? payload.type : 'notification',
-    reason: payload && payload.reason ? payload.reason : '',
-    timestamp: payload && payload.timestamp ? payload.timestamp : new Date().toISOString(),
-    heart_rate: payload && payload.heartRate ? String(payload.heartRate) : '',
-    transcript: payload && payload.transcript ? payload.transcript : '',
-    location_text: location ? formatLocationText(location) : 'Location unavailable',
-    maps_url: location ? location.mapsUrl : '',
-  };
-}
-
-async function sendEmailViaEmailJs(contact, subject, message, payload) {
-  if (!contact || !contact.email || !canUseEmailJs()) return false;
-
-  try {
-    const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        service_id: state.emailJsServiceId,
-        template_id: state.emailJsTemplateId,
-        user_id: state.emailJsPublicKey,
-        template_params: buildEmailJsTemplateParams(contact, subject, message, payload),
-      }),
-    });
-    return response.ok;
   } catch (error) {
     return false;
   }
@@ -1089,14 +971,13 @@ function autoSendAlert() {
 async function legacySendEmergencyAlertMock(reason, options) {
   if (state.alertActive) return;
 
-  syncDeliveryConfigFromInputs();
   const cfg = options || {};
   const primary = state.contacts.find(c => c.primary) || state.contacts[0];
-  if (!primary && !state.alertWebhookUrl) {
-    showToast('Add a primary contact or emergency webhook first.', 'amber');
+  if (!primary) {
+    showToast('Add a primary contact first.', 'amber');
     logEvent({
       title: 'Emergency alert blocked',
-      detail: 'No primary contact or alert webhook is configured yet.',
+      detail: 'No primary contact is configured yet.',
       icon: 'fas fa-circle-exclamation',
       accent: '#F0A03A',
     });
@@ -1116,19 +997,14 @@ async function legacySendEmergencyAlertMock(reason, options) {
 
   const payload = buildEmergencyPayload(reason, location, cfg.source || 'manual');
   const message = buildEmergencyMessage(payload);
-  const webhookSent = state.alertWebhookUrl ? await postWebhook(state.alertWebhookUrl, payload) : false;
-  const emailJsSent = primary
-    ? await sendEmailViaEmailJs(primary, 'WearGuard Emergency Alert', message, payload)
-    : false;
   const deliveredChannels = primary
     ? deliverToContact(primary, 'WearGuard Emergency Alert', message, {
         allowSms: true,
         allowCall: Boolean(cfg.allowCall),
         openAll: Boolean(cfg.openAllChannels),
-        skipEmail: emailJsSent,
       })
     : [];
-  const sentAny = webhookSent || emailJsSent || deliveredChannels.length > 0;
+  const sentAny = deliveredChannels.length > 0;
 
   if (!sentAny) {
     state.alertActive = false;
@@ -1137,17 +1013,17 @@ async function legacySendEmergencyAlertMock(reason, options) {
     showToast('No real delivery route is configured yet.', 'amber');
     logEvent({
       title: 'Emergency alert failed',
-      detail: 'Add WhatsApp, email, phone, or an emergency webhook to send alerts.',
+      detail: 'Add WhatsApp, email, or phone details to send alerts.',
       icon: 'fas fa-triangle-exclamation',
       accent: '#F0A03A',
     });
     return;
   }
 
-  const recipient = primary ? primary.name : 'configured webhook';
+  const recipient = primary.name;
   logEvent({
     title: 'Emergency alert sent',
-    detail: `${reason} Sent to ${recipient} with encrypted location and heart-rate snapshot.`,
+    detail: `${reason} Sent to ${recipient} with location and heart-rate snapshot.`,
     icon: 'fas fa-siren-on', accent: '#D65A3F',
   });
   updateBanner();
@@ -1199,14 +1075,13 @@ function legacyHandlePanicMock(e) {
 async function sendEmergencyAlert(reason, options) {
   if (state.alertActive) return;
 
-  syncDeliveryConfigFromInputs();
   const cfg = options || {};
   const primary = state.contacts.find(c => c.primary) || state.contacts[0] || null;
-  if (!primary && !state.alertWebhookUrl) {
-    showToast('Add a primary contact or emergency webhook first.', 'amber');
+  if (!primary) {
+    showToast('Add a primary contact first.', 'amber');
     logEvent({
       title: 'Emergency alert blocked',
-      detail: 'No primary contact or alert webhook is configured yet.',
+      detail: 'No primary contact is configured yet.',
       icon: 'fas fa-circle-exclamation',
       accent: '#F0A03A',
     });
@@ -1226,48 +1101,39 @@ async function sendEmergencyAlert(reason, options) {
 
   const payload = buildEmergencyPayload(reason, location, cfg.source || 'manual');
   const message = buildEmergencyMessage(payload);
-  const webhookSent = state.alertWebhookUrl ? await postWebhook(state.alertWebhookUrl, payload) : false;
-  const emailJsExpected = isEmailJsPreferredForEmail(primary);
-  const emailJsMissing = emailJsExpected && !canUseEmailJs();
-  const emailJsSent = primary
-    ? await sendEmailViaEmailJs(primary, 'WearGuard Emergency Alert', message, payload)
-    : false;
   const deliveredChannels = primary
     ? deliverToContact(primary, 'WearGuard Emergency Alert', message, {
         allowSms: true,
         allowCall: Boolean(cfg.allowCall),
         openAll: Boolean(cfg.openAllChannels),
-        skipEmail: emailJsExpected,
       })
     : [];
-  const sentAny = webhookSent || emailJsSent || deliveredChannels.length > 0;
+  const sentAny = deliveredChannels.length > 0;
 
   if (!sentAny) {
     state.alertActive = false;
     setPanicUiState(false);
     updateBanner();
-    showToast(emailJsMissing ? `EmailJS needs ${formatMissingFieldList(getEmailJsMissingFields())}.` : 'No real delivery route is configured yet.', 'amber');
+    showToast('No real delivery route is configured yet.', 'amber');
     logEvent({
       title: 'Emergency alert failed',
-      detail: emailJsMissing
-        ? `EmailJS email is selected but missing ${formatMissingFieldList(getEmailJsMissingFields())}.`
-        : 'Add WhatsApp, email, phone, or an emergency webhook to send alerts.',
+      detail: 'Add WhatsApp, email, or phone details to send alerts.',
       icon: 'fas fa-triangle-exclamation',
       accent: '#F0A03A',
     });
     return;
   }
 
-  const recipient = primary ? primary.name : 'configured webhook';
-  const channelSummary = [webhookSent ? 'webhook' : '', emailJsSent ? 'EmailJS' : '', ...deliveredChannels].filter(Boolean).join(', ');
+  const recipient = primary.name;
+  const channelSummary = deliveredChannels.join(', ');
   const locationSummary = location ? ` Location: ${formatLocationText(location)}.` : ' Location unavailable.';
   logEvent({
     title: 'Emergency alert sent',
-    detail: `${reason} Delivered via ${channelSummary || 'configured route'} to ${recipient}.${locationSummary}`,
+    detail: `${reason} Delivered via ${channelSummary || 'contact route'} to ${recipient}.${locationSummary}`,
     icon: 'fas fa-siren-on',
     accent: '#D65A3F',
   });
-  showToast(`Emergency alert sent via ${channelSummary || 'configured route'}.`, 'coral');
+  showToast(`Emergency alert sent via ${channelSummary || 'contact route'}.`, 'coral');
   updateBanner();
 
   setTimeout(() => {
@@ -1470,35 +1336,23 @@ function legacySendLocationNowMock() {
 }
 
 async function sendLocationPayload(contact, context, options) {
-  syncDeliveryConfigFromInputs();
   const cfg = options || {};
   const location = cfg.location || await getCurrentLocation();
   const payload = buildLocationPayload(contact, location, context || {});
   const message = buildLocationMessage(contact, payload);
-  const webhookUrl = cfg.webhookUrl || state.locationWebhookUrl;
-  const webhookSent = webhookUrl ? await postWebhook(webhookUrl, payload) : false;
-  const emailJsExpected = isEmailJsPreferredForEmail(contact);
-  const emailJsMissing = emailJsExpected && !canUseEmailJs();
-  const emailJsSent = contact
-    ? await sendEmailViaEmailJs(contact, 'WearGuard Location Update', message, payload)
-    : false;
   const deliveredChannels = cfg.openRoutes && contact
     ? deliverToContact(contact, 'WearGuard Location Update', message, {
         allowSms: true,
         allowCall: false,
         openAll: Boolean(cfg.openAllChannels),
-        skipEmail: emailJsExpected,
       })
     : [];
 
   return {
     location,
     payload,
-    webhookSent,
-    emailJsMissing,
-    emailJsSent,
     deliveredChannels,
-    sentAny: webhookSent || emailJsSent || deliveredChannels.length > 0,
+    sentAny: deliveredChannels.length > 0,
   };
 }
 
@@ -1516,15 +1370,14 @@ function clearLocationShareSession() {
 }
 
 async function startLocationShare() {
-  syncDeliveryConfigFromInputs();
   const cid = document.getElementById('shareContactSelect').value;
   const mins = parseInt(document.getElementById('shareDurationSelect').value, 10);
   if (!cid) { showToast('Select a contact to share with.', 'amber'); return; }
 
   const contact = state.contacts.find(c => c.id == cid);
   if (!contact) return;
-  if (!hasReachableContactRoute(contact) && !state.locationWebhookUrl) {
-    showToast('Add contact details or a live location webhook first.', 'amber');
+  if (!hasReachableContactRoute(contact)) {
+    showToast('Add WhatsApp, email, or phone details first.', 'amber');
     return;
   }
 
@@ -1542,7 +1395,6 @@ async function startLocationShare() {
       minutes: mins,
     }, {
       openRoutes: true,
-      webhookUrl: state.locationWebhookUrl,
     });
   } catch (error) {
     clearLocationShareSession();
@@ -1560,17 +1412,15 @@ async function startLocationShare() {
   if (!initialResult.sentAny) {
     clearLocationShareSession();
     updateShareStatus(false, 'Location sharing is off.');
-    showToast(initialResult.emailJsMissing ? `EmailJS needs ${formatMissingFieldList(getEmailJsMissingFields())}.` : 'No real delivery route is configured yet.', 'amber');
+    showToast('No real delivery route is configured yet.', 'amber');
     return;
   }
 
   state.lastLocationSentAt = Date.now();
-  const startSummary = [initialResult.webhookSent ? 'webhook' : '', initialResult.emailJsSent ? 'EmailJS' : '', ...initialResult.deliveredChannels].filter(Boolean).join(', ');
-  const continuousNote = state.locationWebhookUrl
-    ? 'continuous webhook updates active'
-    : 'initial location sent; add a webhook for continuous background updates';
+  const startSummary = initialResult.deliveredChannels.join(', ');
+  const continuousNote = 'manual updates only';
   updateShareStatus(true, `Sharing with ${contact.name} - ${continuousNote}`);
-  showToast(`Location sent via ${startSummary || 'configured route'}.`, 'teal');
+  showToast(`Location sent via ${startSummary || 'contact route'}.`, 'teal');
   logEvent({
     title: 'Location sharing started',
     detail: `Real location sent to ${contact.name}. ${continuousNote}.`,
@@ -1586,40 +1436,9 @@ async function startLocationShare() {
     }
 
     const minsRemaining = Math.max(1, Math.ceil(rem / 60000));
-    const suffix = state.locationWebhookUrl ? `${minsRemaining}m remaining` : `waiting for manual sends - ${minsRemaining}m left`;
+    const suffix = `manual updates only - ${minsRemaining}m left`;
     updateShareStatus(true, `Sharing with ${contact.name} - ${suffix}`);
   }, 15000);
-
-  if (!navigator.geolocation) return;
-
-  state.locationWatchId = navigator.geolocation.watchPosition(
-    async (position) => {
-      if (!state.locationSharing || !state.locationWebhookUrl) return;
-
-      const now = Date.now();
-      if (now - state.lastLocationSentAt < LOCATION_UPDATE_INTERVAL_MS) return;
-
-      state.lastLocationSentAt = now;
-      const location = positionToLocation(position);
-      const sent = await postWebhook(state.locationWebhookUrl, buildLocationPayload(contact, location, {
-        mode: 'live',
-        reason: 'Background live location update.',
-        minutes: mins,
-      }));
-
-      updateShareStatus(
-        true,
-        sent
-          ? `Sharing with ${contact.name} - live update sent ${formatTime(new Date())}`
-          : `Sharing with ${contact.name} - webhook update failed`
-      );
-    },
-    (error) => {
-      updateShareStatus(true, `Sharing with ${contact.name} - ${getLocationErrorMessage(error)}`);
-      showToast(getLocationErrorMessage(error), 'amber');
-    },
-    { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 }
-  );
 }
 
 function stopLocationShare(auto) {
@@ -1648,14 +1467,13 @@ function stopLocationShare(auto) {
 }
 
 async function sendLocationNow() {
-  syncDeliveryConfigFromInputs();
   const cid = document.getElementById('shareContactSelect').value;
   if (!cid) { showToast('Select a contact first.', 'amber'); return; }
 
   const contact = state.contacts.find(c => c.id == cid);
   if (!contact) return;
-  if (!hasReachableContactRoute(contact) && !state.locationWebhookUrl) {
-    showToast('Add contact details or a live location webhook first.', 'amber');
+  if (!hasReachableContactRoute(contact)) {
+    showToast('Add WhatsApp, email, or phone details first.', 'amber');
     return;
   }
 
@@ -1666,19 +1484,18 @@ async function sendLocationNow() {
       minutes: 0,
     }, {
       openRoutes: true,
-      webhookUrl: state.locationWebhookUrl,
     });
 
     if (!result.sentAny) {
-      showToast(result.emailJsMissing ? `EmailJS needs ${formatMissingFieldList(getEmailJsMissingFields())}.` : 'No real delivery route is configured yet.', 'amber');
+      showToast('No real delivery route is configured yet.', 'amber');
       return;
     }
 
-    const channelSummary = [result.webhookSent ? 'webhook' : '', result.emailJsSent ? 'EmailJS' : '', ...result.deliveredChannels].filter(Boolean).join(', ');
-    showToast(`Location sent via ${channelSummary || 'configured route'}.`, 'teal');
+    const channelSummary = result.deliveredChannels.join(', ');
+    showToast(`Location sent via ${channelSummary || 'contact route'}.`, 'teal');
     logEvent({
       title: 'Location sent',
-      detail: `Real location delivered to ${contact.name} via ${channelSummary || 'configured route'}.`,
+      detail: `Real location delivered to ${contact.name} via ${channelSummary || 'contact route'}.`,
       icon: 'fas fa-paper-plane',
       accent: '#198A73',
     });
