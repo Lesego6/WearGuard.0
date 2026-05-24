@@ -1,0 +1,297 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WearGuard</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body class="auth-locked">
+
+<div class="auth-gate" id="authGate" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <div class="auth-shell">
+    <div class="auth-card">
+      <div class="auth-badge"><i class="fas fa-shield-halved"></i> Device Access</div>
+      <h1 class="auth-title" id="authTitle">Sign in to WearGuard</h1>
+      <p class="auth-copy">
+        Use your name and email to unlock WearGuard. Keep <strong>Remember this device</strong>
+        turned on if you want this browser to skip the login next time.
+      </p>
+      <form class="auth-form" id="authForm">
+        <div class="auth-field-grid">
+          <label class="auth-field" for="authNameInput">
+            <span>Name</span>
+            <input id="authNameInput" type="text" autocomplete="name" placeholder="Your name" />
+          </label>
+          <label class="auth-field" for="authEmailInput">
+            <span>Email</span>
+            <input id="authEmailInput" type="email" autocomplete="email" placeholder="name@example.com" />
+          </label>
+        </div>
+        <div class="hp-field" aria-hidden="true">
+          <label for="authWebsiteInput">Website</label>
+          <input id="authWebsiteInput" type="text" name="website" tabindex="-1" autocomplete="off" />
+        </div>
+        <label class="auth-check" for="authRememberInput">
+          <input id="authRememberInput" type="checkbox" checked />
+          <span>Remember this device</span>
+        </label>
+        <button class="auth-submit" id="authSubmitBtn" type="submit">
+          <i class="fas fa-user-shield"></i> Enter WearGuard
+        </button>
+        <p class="auth-status" id="authStatusText">This is a once-off sign-in on trusted devices.</p>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="bg-canvas" aria-hidden="true">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+</div>
+
+<div class="app-wrap">
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon"><i class="fas fa-shield-halved"></i></div>
+      <div>
+        <div class="logo-text">Wear<span>Guard</span></div>
+      </div>
+    </div>
+    <div class="header-status">
+      <div class="status-dot" id="wearableDot"></div>
+      <span id="wearableLabel">Watch connected</span>
+    </div>
+  </header>
+
+  <!-- STATUS BANNER -->
+  <div class="status-banner" id="statusBanner">
+    <div class="banner-icon" id="bannerIcon"><i class="fas fa-shield-halved"></i></div>
+    <div class="banner-body">
+      <div class="banner-label" id="bannerLabel">ALL CLEAR</div>
+      <div class="banner-text" id="bannerText">Monitoring active. Heart rate and AI safety systems are running.</div>
+    </div>
+  </div>
+
+  <!-- CHIP ROW -->
+  <div class="chip-row">
+    <div class="chip amber" id="hrChip"><i class="fas fa-heart"></i> <span id="hrChipVal">84 BPM</span></div>
+    <div class="chip" id="contactChip"><i class="fas fa-user-shield"></i> <span id="contactChipVal">No contacts</span></div>
+    <div class="chip" id="codeChip"><i class="fas fa-key"></i> <span id="codeChipVal">No code word</span></div>
+  </div>
+
+  <!-- â”€â”€ HEART RATE CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <div class="section-card open" id="cardHR">
+    <div class="section-header" onclick="toggleCard('cardHR')">
+      <div class="section-icon"><i class="fas fa-heartbeat"></i></div>
+      <div>
+        <div class="section-title">Heart Rate Monitor</div>
+        <div class="section-subtitle">Live wearable data</div>
+      </div>
+      <i class="fas fa-chevron-down section-chevron"></i>
+    </div>
+    <div class="section-body">
+      <div class="hr-display">
+        <div>
+          <div class="hr-number" id="hrNumber">84</div>
+          <div class="hr-unit">BPM</div>
+        </div>
+        <div class="hr-right">
+          <div class="hr-bar-wrap">
+            <div class="hr-bar" id="hrBar" style="width:42%"></div>
+          </div>
+          <div class="hr-labels"><span>40</span><span>90</span><span>140+</span></div>
+        </div>
+      </div>
+      <button class="hr-sim-btn" id="hrSimBtn" onclick="simulateHighHR()">
+        <i class="fas fa-bolt"></i> Simulate high heart rate (stress event)
+      </button>
+    </div>
+  </div>
+
+  <!-- â”€â”€ SAFETY AI CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <div class="section-card open" id="cardAI">
+    <div class="section-header" onclick="toggleCard('cardAI')">
+      <div class="section-icon"><i class="fas fa-brain"></i></div>
+      <div>
+        <div class="section-title">Safety AI</div>
+        <div class="section-subtitle">Voice & code word detection</div>
+      </div>
+      <i class="fas fa-chevron-down section-chevron"></i>
+    </div>
+    <div class="section-body">
+      <div class="ai-response" id="aiResponse">
+        Set a private code word so Safety AI only reacts to a phrase you choose.
+      </div>
+      <div class="voice-panel">
+        <div class="voice-status-row">
+          <div class="voice-label">Voice safety check</div>
+          <div class="voice-state" id="voiceState">
+            <span class="voice-state-dot"></span>
+            <span id="voiceStateText">Starting</span>
+          </div>
+        </div>
+        <div class="voice-transcript placeholder" id="voiceTranscript" aria-live="polite">
+          WearGuard is starting voice safety monitoring automatically. Speak naturally and Safety AI will analyse your conversation for danger signals and your private code word.
+        </div>
+        <div class="voice-helper" id="voiceHelper">
+          Voice capture starts automatically when the page opens.
+        </div>
+        <div class="voice-controls">
+          <button class="voice-btn" id="voiceListenBtn" type="button" onclick="toggleVoiceRecognition()">
+            <i class="fas fa-stop"></i> Pause listening
+          </button>
+          <button class="voice-btn secondary" id="voiceClearBtn" type="button" onclick="clearVoiceTranscript()">
+            <i class="fas fa-rotate-left"></i> Clear
+          </button>
+        </div>
+      </div>
+      <div class="code-word-row">
+        <input class="code-input" id="codeWordInput" type="text"
+          placeholder="Set private code word (e.g. pineapple)" />
+        <button class="code-save-btn" onclick="saveCodeWord()">
+          <i class="fas fa-key"></i> Save
+        </button>
+      </div>
+      <div class="countdown-bar" id="countdownBar">
+        <div class="cd-timer" id="cdTimer">2:00</div>
+        <div class="cd-text">Immediate alert mode is enabled.<br>Danger signals dispatch the alert without delay.</div>
+        <button class="cd-cancel" onclick="cancelCountdown()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- â”€â”€ SETTINGS CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <div class="section-card" id="cardSettings">
+    <div class="section-header" onclick="toggleCard('cardSettings')">
+      <div class="section-icon"><i class="fas fa-sliders"></i></div>
+      <div>
+        <div class="section-title">Safety Settings</div>
+        <div class="section-subtitle">Contacts, location sharing</div>
+      </div>
+      <i class="fas fa-chevron-down section-chevron"></i>
+    </div>
+    <div class="section-body">
+
+      <!-- EMERGENCY CONTACTS -->
+      <div class="settings-section">
+        <h4><i class="fas fa-user-shield"></i> Emergency Contacts Circle</h4>
+        <div class="settings-row">
+          <input id="contactNameInput"     type="text"  placeholder="Name" />
+          <input id="contactPhoneInput"    type="tel"   placeholder="Phone (for calls)" />
+        </div>
+        <div class="settings-row">
+          <input id="contactWhatsAppInput" type="tel"   placeholder="WhatsApp (with country code)" />
+          <input id="contactEmailInput"    type="email" placeholder="Email (for alerts)" />
+          <button id="addContactBtn" class="mini-btn" type="button" onclick="addContact()">
+            <i class="fas fa-user-plus"></i> Add
+          </button>
+        </div>
+        <small>Mark one contact as <strong>Primary</strong> - they receive the panic alert first.</small>
+        <ul id="contactsList" class="settings-list"></ul>
+      </div>
+
+      <!-- LOCATION SHARING -->
+      <div class="settings-section">
+        <h4><i class="fas fa-location-arrow"></i> Location Sharing</h4>
+        <div class="settings-row">
+          <select id="shareContactSelect">
+            <option value="">Select contact to share with</option>
+          </select>
+          <select id="shareDurationSelect">
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">60 minutes</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <button id="startShareBtn"   class="mini-btn"           type="button" onclick="startLocationShare()">
+            <i class="fas fa-share-alt"></i> Start sharing
+          </button>
+          <button id="stopShareBtn"    class="mini-btn secondary" type="button" onclick="stopLocationShare()">
+            <i class="fas fa-stop"></i> Stop
+          </button>
+          <button id="sendShareNowBtn" class="mini-btn secondary" type="button" onclick="sendLocationNow()">
+            <i class="fas fa-paper-plane"></i> Send now
+          </button>
+        </div>
+        <div class="share-status">
+          <div class="share-dot" id="shareDot"></div>
+          <span id="shareStatusText">Location sharing is off.</span>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h4><i class="fas fa-tower-broadcast"></i> Delivery Endpoints</h4>
+        <div class="settings-row">
+          <input id="alertWebhookInput" type="url" placeholder="Emergency webhook URL (optional)" />
+        </div>
+        <div class="settings-row">
+          <input id="locationWebhookInput" type="url" placeholder="Live location webhook URL (optional)" />
+        </div>
+        <div class="settings-row">
+          <input id="emailJsServiceInput" type="text" placeholder="EmailJS service ID" value="service_8poulyg" />
+          <input id="emailJsTemplateInput" type="text" placeholder="EmailJS template ID" value="template_05wae3g" />
+        </div>
+        <div class="settings-row">
+          <input id="emailJsPublicKeyInput" type="text" placeholder="EmailJS public key" />
+          <button id="saveDeliveryBtn" class="mini-btn secondary" type="button" onclick="saveDeliveryConfig()">
+            <i class="fas fa-cloud-arrow-up"></i> Save
+          </button>
+        </div>
+        <small>WhatsApp, EmailJS, phone and Web Share can open real delivery actions. EmailJS needs a template ID and public key in addition to the service ID. Webhooks are still available for AI-triggered alerts and continuous live-location updates.</small>
+      </div>
+
+      <div class="settings-section">
+        <h4><i class="fas fa-user-shield"></i> Device Access</h4>
+        <div class="device-access-card">
+          <div class="device-access-title" id="deviceAccessTitle">This device is not trusted yet.</div>
+          <div class="device-access-copy" id="deviceAccessText">Sign in and keep remember enabled if you want WearGuard to skip the login here next time.</div>
+        </div>
+        <div class="settings-row">
+          <button id="forgetDeviceBtn" class="mini-btn secondary" type="button" onclick="forgetTrustedDevice()">
+            <i class="fas fa-rotate-left"></i> Forget this device
+          </button>
+        </div>
+        <small>You can clear the trusted-device login at any time and require sign-in again on this browser.</small>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- â”€â”€ ACTIVITY LOG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <div class="section-card open" id="cardLog">
+    <div class="section-header" onclick="toggleCard('cardLog')">
+      <div class="section-icon"><i class="fas fa-clock-rotate-left"></i></div>
+      <div>
+        <div class="section-title">Activity Log</div>
+        <div class="section-subtitle">Recent safety events</div>
+      </div>
+      <i class="fas fa-chevron-down section-chevron"></i>
+    </div>
+    <div class="section-body">
+      <div class="event-list" id="eventList"></div>
+    </div>
+  </div>
+
+</div><!-- /app-wrap -->
+
+<!-- PANIC BUTTON DOCK -->
+<div class="panic-dock">
+  <button class="panic-btn" id="panicBtn" onclick="handlePanic(event)">
+    <i class="fas fa-triangle-exclamation btn-icon"></i>
+    <span id="panicBtnLabel">Send Emergency Alert</span>
+  </button>
+  <div class="panic-hint" id="panicHint">Hold to confirm - sends to emergency contacts</div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-wrap" id="toastWrap"></div>
+
+<!-- â”€â”€â”€ JAVASCRIPT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+<script src="script.js"></script>
+</body>
+</html>
