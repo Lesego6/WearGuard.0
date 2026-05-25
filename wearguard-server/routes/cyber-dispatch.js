@@ -30,6 +30,15 @@ function formatCyberMessage(transcript) {
   return `Possible social engineering or credential coercion detected. Phrase: ${phrase}`;
 }
 
+function parseOptionalHeartRate(heartRate) {
+  if (heartRate === null || typeof heartRate === 'undefined' || heartRate === '') {
+    return null;
+  }
+
+  const parsed = Number(heartRate);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 router.use(requireSession);
 
 // Cyber-resilience alert routing for SIEM and security-team notifications.
@@ -48,7 +57,7 @@ router.post('/', async (req, res) => {
       user: req.session.profile || null,
       type: type || 'cyber-coercion',
       transcript: transcript || '',
-      heartRate: Number.isFinite(Number(heartRate)) ? Number(heartRate) : null,
+      heartRate: parseOptionalHeartRate(heartRate),
       location: location || null,
       timestamp: timestamp || new Date().toISOString(),
     });
@@ -60,7 +69,7 @@ router.post('/', async (req, res) => {
       alertType: 'cyber-coercion',
       severity: 'HIGH',
       transcript: typeof transcript === 'string' ? transcript : '',
-      heartRate: Number.isFinite(Number(heartRate)) ? Number(heartRate) : null,
+      heartRate: parseOptionalHeartRate(heartRate),
       location: location || null,
       timestamp: timestamp || new Date().toISOString(),
       message: formatCyberMessage(transcript),

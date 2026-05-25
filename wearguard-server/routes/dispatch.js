@@ -18,7 +18,17 @@ function formatMapsLink(location) {
 }
 
 function formatHeartRate(heartRate) {
-  return Number.isFinite(Number(heartRate)) ? `${Number(heartRate)} BPM` : 'not available';
+  const parsedHeartRate = parseOptionalHeartRate(heartRate);
+  return parsedHeartRate == null ? 'not available' : `${parsedHeartRate} BPM`;
+}
+
+function parseOptionalHeartRate(heartRate) {
+  if (heartRate === null || typeof heartRate === 'undefined' || heartRate === '') {
+    return null;
+  }
+
+  const parsed = Number(heartRate);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function escapeHtml(value) {
@@ -84,7 +94,7 @@ router.post('/', async (req, res) => {
       type: alertType,
       contact,
       location: location || null,
-      heartRate: Number.isFinite(Number(heartRate)) ? Number(heartRate) : null,
+      heartRate: parseOptionalHeartRate(heartRate),
       transcript: transcriptText,
       timestamp: timestamp || new Date().toISOString(),
       securityWebhookUrl: typeof securityWebhookUrl === 'string' ? securityWebhookUrl : '',

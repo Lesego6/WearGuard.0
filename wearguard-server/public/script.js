@@ -45,7 +45,7 @@ const state = {
   panicHold: null,          // {startedAt, timerId, rafId, source}
   localDevWarningShown: false,
   developerMode: false,
-  security: createDefaultSecurityState(),
+  security: null,
   wearable: {
     bluetoothSupported: false,
     secureContext: false,
@@ -314,6 +314,9 @@ function normalizeSecurityState(value) {
   };
 }
 
+// Initialize the security snapshot after the catalog constants are available.
+state.security = createDefaultSecurityState();
+
 /* â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 window.addEventListener('DOMContentLoaded', () => {
   bindAuthForm();
@@ -329,6 +332,14 @@ async function initializeApp() {
   if (sessionRestored) {
     await restoreProtectedState();
     setAuthStatus('Secure session restored.', 'success');
+    unlockWearGuard({ silent: true, skipToast: true, skipDashboardScroll: true });
+    return;
+  }
+
+  // Preserve a session that may have been created while the initial restore request was still in flight.
+  if (state.authProfile && state.storageKey) {
+    await restoreProtectedState();
+    setAuthStatus('Secure session active.', 'success');
     unlockWearGuard({ silent: true, skipToast: true, skipDashboardScroll: true });
     return;
   }
@@ -1030,6 +1041,11 @@ async function restoreServerSession() {
         applyServerSession(localSession);
         return Boolean(state.authProfile && state.storageKey);
       }
+    }
+
+    // A manual sign-in may have completed while this restore request was still resolving.
+    if (state.authProfile && state.storageKey) {
+      return true;
     }
 
     clearServerSessionState();
