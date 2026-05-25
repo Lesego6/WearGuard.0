@@ -17,7 +17,7 @@
       <p class="auth-copy">
         Use your name and email to open a secure WearGuard session.
         Keep <strong>Remember this device</strong> turned on if you want the server to keep
-        this browser signed in between visits.
+        this browser signed in between visits. After sign-in, WearGuard will open your safety dashboard.
       </p>
       <form class="auth-form" id="authForm">
         <div class="auth-field-grid">
@@ -39,7 +39,7 @@
           <span>Remember this device</span>
         </label>
         <button class="auth-submit" id="authSubmitBtn" type="submit">
-          <i class="fas fa-user-shield"></i> Enter WearGuard
+          <i class="fas fa-user-shield"></i> Enter WearGuard Dashboard
         </button>
         <p class="auth-status" id="authStatusText">Secure sign-in checks a server session before WearGuard unlocks.</p>
       </form>
@@ -53,7 +53,7 @@
   <div class="orb orb-3"></div>
 </div>
 
-<div class="app-wrap">
+<div class="app-wrap" id="dashboardView" tabindex="-1">
 
   <!-- HEADER -->
   <header>
@@ -488,9 +488,18 @@
 
 <!-- PANIC BUTTON DOCK -->
 <div class="panic-dock">
-  <button class="panic-btn" id="panicBtn" type="button">
-    <i class="fas fa-triangle-exclamation btn-icon"></i>
-    <span id="panicBtnLabel">Send Emergency Alert</span>
+  <button class="panic-btn" id="panicBtn" type="button" aria-describedby="panicHint">
+    <span class="panic-btn-main">
+      <i class="fas fa-triangle-exclamation btn-icon"></i>
+      <span id="panicBtnLabel">Send Emergency Alert</span>
+    </span>
+    <span class="panic-progress" aria-hidden="true">
+      <svg class="panic-progress-svg" viewBox="0 0 48 48">
+        <circle class="panic-progress-track" cx="24" cy="24" r="20"></circle>
+        <circle class="panic-progress-ring" id="panicProgressRing" cx="24" cy="24" r="20"></circle>
+      </svg>
+      <span class="panic-progress-text" id="panicProgressText"></span>
+    </span>
   </button>
   <div class="panic-hint" id="panicHint">Hold to confirm - sends to emergency contacts</div>
 </div>

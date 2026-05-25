@@ -1,16 +1,19 @@
 ﻿/* â”€â”€ STATE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 const state = {
-  heartRate: 84,
+  heartRate: null,
   alertActive: false,
   booted: false,
-  conversation: 'routine',   // routine | concern | danger
+  conversation: 'routine',   // routine | concern | danger | cyber
   codeWord: '',
   contacts: [],              // {id, name, phone, whatsapp, email, primary}
   events: [],
+  eventLogPromise: Promise.resolve(),
   countdown: null,           // {deadline, timerId, tickerId}
   locationSharing: false,
   locationTimer: null,
+  locationStatusTimer: null,
   locationContact: null,
+  locationContactId: null,
   locationWatchId: null,
   locationShareEndsAt: null,
   lastLocation: null,
@@ -24,11 +27,23 @@ const state = {
   voiceRestartPending: false,
   voiceRestartTimer: null,
   voicePermissionBlocked: false,
+  pageHiddenAt: 0,
+  voiceRestartBlockedByHidden: false,
   authProfile: null,
   authRemembered: false,
   authLocked: true,
   storageKey: '',
   storageCryptoKeyPromise: null,
+  dashboardEnterTimer: null,
+  alertResetTimer: null,
+  alertCooldownTimer: null,
+  lastAlertSentAt: 0,
+  lastAlertCooldownNoticeAt: 0,
+  lastCyberAlertSentAt: 0,
+  panicClickSuppressedUntil: 0,
+  panicHold: null,          // {startedAt, timerId, rafId, source}
+  localDevWarningShown: false,
+  developerMode: false,
   security: createDefaultSecurityState(),
   wearable: {
     bluetoothSupported: false,
@@ -52,14 +67,47 @@ const state = {
 
 const DANGER_SIGNALS  = ['help','danger','unsafe','attack','followed','hurt','trapped','panic','emergency','stalker',"can't breathe","dont feel safe","do not feel safe","i need help","please help"];
 const CONCERN_SIGNALS = ['worried','nervous','anxious','late','check in','check-in','lost','tense','something feels off','uncomfortable','uneasy'];
+const CYBER_SIGNALS = ['password', 'otp', 'verify', 'wire transfer', 'send money', 'click the link', 'confirm your code'];
 const STORAGE_KEY = 'wearguard-settings-v2';
 const WEARABLE_DEVICE_KEY = 'wearguard-last-watch-v1';
 const SESSION_ENDPOINT = '/api/session';
 const DISPATCH_ENDPOINT = '/api/dispatch';
+const CYBER_DISPATCH_ENDPOINT = '/api/cyber-dispatch';
 const DEV_LOCAL_SESSION_KEY = 'wearguard-local-dev-session-v1';
 const LOCATION_UPDATE_INTERVAL_MS = 60 * 1000;
-const VOICE_RESTART_DELAY_MS = 900;
+const LOCATION_UPDATE_JITTER_MS = 8 * 1000;
+const RAPID_ALERT_LOCATION_INTERVAL_MS = 12 * 1000;
+const RAPID_ALERT_LOCATION_WINDOW_MS = 5 * 60 * 1000;
+const LOCATION_STATUS_INTERVAL_MS = 15 * 1000;
+const VOICE_RESTART_DELAY_MS = 2500;
+const PAGE_HIDDEN_RESTART_BLOCK_MS = 60 * 1000;
 const WEARABLE_TELEMETRY_INTERVAL_MS = 4200;
+const PANIC_HOLD_DURATION_MS = 3000;
+const ALERT_ACTIVE_RESET_MS = 8000;
+const ALERT_COOLDOWN_MS = 30 * 1000;
+const ALERT_COOLDOWN_INTERVAL_MS = 1000;
+const CYBER_ALERT_COOLDOWN_MS = 30 * 1000;
+const EVENT_LOG_LIMIT = 50;
+const NEGATION_WINDOW_WORDS = 3;
+const NEGATION_TOKENS = new Set([
+  'not',
+  'no',
+  'dont',
+  'never',
+  'cant',
+  'cannot',
+  'wont',
+  'didnt',
+  'isnt',
+  'arent',
+  'wasnt',
+  'werent',
+  'shouldnt',
+  'wouldnt',
+  'couldnt',
+]);
+const PANIC_PROGRESS_RADIUS = 20;
+const PANIC_PROGRESS_CIRCUMFERENCE = 2 * Math.PI * PANIC_PROGRESS_RADIUS;
 const DEMO_WEARABLES = [
   {
     id: 'sentinel-s3',
@@ -86,13 +134,6 @@ const DEMO_WEARABLES = [
     restingHeartRate: 88,
   },
 ];
-const REMOVED_AUTO_CONTACT = {
-  id: 2040793019099,
-  name: 'Lesego Moeng',
-  phone: '',
-  whatsapp: '0793019099',
-  email: 'lesegomoeng0204@gmail.con',
-};
 
 const SECURITY_SCALE = {
   low: { label: 'Low', weight: 1 },
@@ -194,6 +235,7 @@ function createDefaultSecurityState() {
     dataSensitivity: 'high',
     integrationCriticality: 'high',
     attackSurface: 'moderate',
+    securityWebhookUrl: '',
     designReviewNotes: 'Review auth flow, wearable trust boundaries, data retention, and alert delivery downgrade paths before release.',
     integrationNotes: 'Validate session cookies, permission prompts, secure relay, and browser storage behavior in the target deployment.',
     threatReviews: normalizeChecklistValues(SECURITY_THREAT_CATALOG, {}),
@@ -255,6 +297,7 @@ function normalizeSecurityState(value) {
     dataSensitivity: SECURITY_SCALE[source.dataSensitivity] ? source.dataSensitivity : defaults.dataSensitivity,
     integrationCriticality: SECURITY_SCALE[source.integrationCriticality] ? source.integrationCriticality : defaults.integrationCriticality,
     attackSurface: SECURITY_SCALE[source.attackSurface] ? source.attackSurface : defaults.attackSurface,
+    securityWebhookUrl: typeof source.securityWebhookUrl === 'string' ? source.securityWebhookUrl.trim() : defaults.securityWebhookUrl,
     designReviewNotes: typeof source.designReviewNotes === 'string' ? source.designReviewNotes.trim() : defaults.designReviewNotes,
     integrationNotes: typeof source.integrationNotes === 'string' ? source.integrationNotes.trim() : defaults.integrationNotes,
     threatReviews: normalizeChecklistValues(SECURITY_THREAT_CATALOG, source.threatReviews || defaults.threatReviews),
@@ -285,7 +328,7 @@ async function initializeApp() {
   if (sessionRestored) {
     await restoreProtectedState();
     setAuthStatus('Secure session restored.', 'success');
-    unlockWearGuard({ silent: true, skipToast: true });
+    unlockWearGuard({ silent: true, skipToast: true, skipDashboardScroll: true });
     return;
   }
 
@@ -345,12 +388,20 @@ function bindUiActions() {
   bindClick('stopShareBtn', () => stopLocationShare());
   bindClick('sendShareNowBtn', () => sendLocationNow());
   bindClick('forgetDeviceBtn', () => forgetTrustedDevice());
-  bindClick('panicBtn', (event) => handlePanic(event));
+  bindClick('downloadLogBtn', () => downloadEventLog());
+  bindClick('verifyChainBtn', () => verifyEventChain());
+  bindClick('developerModeToggleBtn', () => toggleDeveloperMode());
+  bindPanicButton();
 
   const contactsList = document.getElementById('contactsList');
   if (contactsList && contactsList.dataset.bound !== 'true') {
     contactsList.addEventListener('click', handleContactsListClick);
     contactsList.dataset.bound = 'true';
+  }
+
+  if (document.body && document.body.dataset.visibilityBound !== 'true') {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.body.dataset.visibilityBound = 'true';
   }
 
   bindSecurityPanel();
@@ -361,6 +412,21 @@ function bindClick(id, handler) {
   if (!element || element.dataset.bound === 'true') return;
   element.addEventListener('click', handler);
   element.dataset.bound = 'true';
+}
+
+function bindPanicButton() {
+  const button = document.getElementById('panicBtn');
+  if (!button || button.dataset.panicBound === 'true') return;
+
+  button.addEventListener('pointerdown', handlePanicPointerDown);
+  button.addEventListener('pointerup', handlePanicPointerUp);
+  button.addEventListener('pointerleave', handlePanicPointerCancel);
+  button.addEventListener('pointercancel', handlePanicPointerCancel);
+  button.addEventListener('keydown', handlePanicKeyDown);
+  button.addEventListener('keyup', handlePanicKeyUp);
+  button.addEventListener('blur', handlePanicBlur);
+  button.addEventListener('click', handlePanicClick);
+  button.dataset.panicBound = 'true';
 }
 
 function bindSecurityPanel() {
@@ -395,6 +461,14 @@ function handleSecurityPanelInput(event) {
 
   if (target.id === 'securityIntegrationNotesInput') {
     state.security.integrationNotes = target.value.trim();
+    persistSettings();
+    renderSecurityOverview();
+    renderSecurityAssessmentSummary();
+    return;
+  }
+
+  if (target.id === 'securityWebhookUrlInput') {
+    state.security.securityWebhookUrl = target.value.trim();
     persistSettings();
     renderSecurityOverview();
     renderSecurityAssessmentSummary();
@@ -584,6 +658,7 @@ function unlockWearGuard(options) {
   document.body.classList.remove('auth-locked');
   const authGate = document.getElementById('authGate');
   if (authGate) authGate.classList.add('hidden');
+  enterDashboardView({ skipScroll: settings.skipDashboardScroll });
   updateDeviceAccessUi();
   if (!settings.silent) {
     setAuthStatus('Secure session active.', 'success');
@@ -593,12 +668,61 @@ function unlockWearGuard(options) {
 
 function lockWearGuard() {
   state.authLocked = true;
+  clearDashboardEntryTransition();
   document.body.classList.add('auth-locked');
   const authGate = document.getElementById('authGate');
   if (authGate) authGate.classList.remove('hidden');
   pauseVoiceRecognitionForLock();
   updateDeviceAccessUi();
   setAuthStatus('Sign in to continue.', '');
+}
+
+function clearDashboardEntryTransition() {
+  if (state.dashboardEnterTimer) {
+    clearTimeout(state.dashboardEnterTimer);
+    state.dashboardEnterTimer = null;
+  }
+  document.body.classList.remove('dashboard-entering');
+}
+
+function enterDashboardView(options) {
+  const settings = options || {};
+  const dashboardView = document.getElementById('dashboardView');
+
+  clearDashboardEntryTransition();
+  document.body.classList.add('dashboard-entering');
+  state.dashboardEnterTimer = setTimeout(() => {
+    document.body.classList.remove('dashboard-entering');
+    state.dashboardEnterTimer = null;
+  }, 700);
+
+  if (!dashboardView) return;
+
+  try {
+    if (window.location.hash !== '#dashboard') {
+      history.replaceState(null, '', `${window.location.pathname}${window.location.search}#dashboard`);
+    }
+  } catch (error) {
+    window.location.hash = 'dashboard';
+  }
+
+  if (settings.skipScroll) {
+    try {
+      dashboardView.focus({ preventScroll: true });
+    } catch (error) {
+      dashboardView.focus();
+    }
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    dashboardView.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      dashboardView.focus({ preventScroll: true });
+    } catch (error) {
+      dashboardView.focus();
+    }
+  });
 }
 
 async function forgetTrustedDevice() {
@@ -759,6 +883,13 @@ function createLocalDevelopmentSession(profile, remember) {
   };
 }
 
+function warnLocalDevelopmentSessionFallback() {
+  if (state.localDevWarningShown || !isLocalDevelopmentSessionActive()) return;
+
+  console.warn('WearGuard local-development session fallback is active. Re-test secure session flows under the final HTTPS deployment.');
+  state.localDevWarningShown = true;
+}
+
 function persistLocalDevelopmentSession(sessionPayload) {
   if (!sessionPayload || !sessionPayload.profile) return;
 
@@ -805,6 +936,9 @@ function applyServerSession(payload) {
   state.authProfile = profile;
   state.authRemembered = Boolean(payload && payload.remembered);
   setStorageKey(payload && payload.storageKey ? payload.storageKey : '');
+  if (payload && payload.localDevelopment) {
+    warnLocalDevelopmentSessionFallback();
+  }
 
   const nameInput = document.getElementById('authNameInput');
   const emailInput = document.getElementById('authEmailInput');
@@ -914,7 +1048,21 @@ async function getStorageCryptoKey() {
 }
 
 function bytesToBase64(bytes) {
-  return btoa(String.fromCharCode(...bytes));
+  const chunkSize = 8192;
+  let binary = '';
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    let chunkBinary = '';
+
+    for (let offset = 0; offset < chunk.length; offset++) {
+      chunkBinary += String.fromCharCode(chunk[offset]);
+    }
+
+    binary += chunkBinary;
+  }
+
+  return btoa(binary);
 }
 
 function base64ToBytes(value) {
@@ -973,13 +1121,25 @@ async function writeProtectedStorage(key, value) {
 }
 
 function clearProtectedRuntimeState() {
+  cancelPanicHold({ silent: true });
+  clearAlertResetTimer();
+  clearAlertCooldownTimer();
+  clearLocationShareSession();
   state.codeWord = '';
   state.contacts = [];
   state.events = [];
+  state.eventLogPromise = Promise.resolve();
   state.conversation = 'routine';
   state.voiceTranscript = '';
   state.voiceInterim = '';
+  state.pageHiddenAt = 0;
+  state.voiceRestartBlockedByHidden = false;
   state.alertActive = false;
+  state.lastAlertSentAt = 0;
+  state.lastAlertCooldownNoticeAt = 0;
+  state.lastCyberAlertSentAt = 0;
+  state.panicClickSuppressedUntil = 0;
+  state.localDevWarningShown = false;
   state.lastLocation = null;
   state.security = createDefaultSecurityState();
   state.wearable.connectedDevice = null;
@@ -1012,8 +1172,6 @@ async function restoreProtectedState() {
   if (savedWearable) {
     state.wearable.lastPairedDevice = normalizeWearableProfile(savedWearable);
   }
-
-  removeAutoAddedEmergencyContact();
 }
 
 function initWearableBridge() {
@@ -1681,26 +1839,6 @@ function normalizeContact(contact) {
     email: String(contact.email || '').trim(),
     primary: Boolean(contact.primary),
   };
-}
-
-function removeAutoAddedEmergencyContact() {
-  const before = state.contacts.length;
-  state.contacts = state.contacts.filter((contact) => !(
-    contact.id === REMOVED_AUTO_CONTACT.id ||
-    (
-      contact.name === REMOVED_AUTO_CONTACT.name &&
-      contact.whatsapp === REMOVED_AUTO_CONTACT.whatsapp &&
-      contact.email === REMOVED_AUTO_CONTACT.email
-    )
-  ));
-
-  if (state.contacts.length && !state.contacts.some(c => c.primary)) {
-    state.contacts[0].primary = true;
-  }
-
-  if (state.contacts.length !== before) {
-    persistSettings();
-  }
 }
 
 function getSecurityReviewMap(group) {
@@ -2677,17 +2815,291 @@ function deliverToContact(contact, subject, message, options) {
 }
 
 function setPanicUiState(active) {
+  if (typeof active === 'boolean') {
+    state.alertActive = active;
+  }
+
+  syncPanicUiState();
+}
+
+function getAlertCooldownRemainingMs() {
+  if (!state.lastAlertSentAt) return 0;
+  return Math.max(0, ALERT_COOLDOWN_MS - (Date.now() - state.lastAlertSentAt));
+}
+
+function clearAlertResetTimer() {
+  if (!state.alertResetTimer) return;
+  clearTimeout(state.alertResetTimer);
+  state.alertResetTimer = null;
+}
+
+function clearAlertCooldownTimer() {
+  if (!state.alertCooldownTimer) return;
+  clearInterval(state.alertCooldownTimer);
+  state.alertCooldownTimer = null;
+}
+
+function startAlertCooldownTimer() {
+  clearAlertCooldownTimer();
+  if (!getAlertCooldownRemainingMs()) return;
+
+  state.alertCooldownTimer = setInterval(() => {
+    syncPanicUiState();
+    if (!getAlertCooldownRemainingMs()) {
+      clearAlertCooldownTimer();
+    }
+  }, ALERT_COOLDOWN_INTERVAL_MS);
+}
+
+function scheduleAlertReset() {
+  clearAlertResetTimer();
+  state.alertResetTimer = setTimeout(() => {
+    state.alertResetTimer = null;
+    setPanicUiState(false);
+    state.conversation = 'routine';
+    updateBanner();
+  }, ALERT_ACTIVE_RESET_MS);
+}
+
+function isAlertCoolingDown() {
+  return getAlertCooldownRemainingMs() > 0;
+}
+
+function setPanicProgress(progress, remainingMs) {
+  const btn = document.getElementById('panicBtn');
+  const ring = document.getElementById('panicProgressRing');
+  const text = document.getElementById('panicProgressText');
+
+  if (!btn || !ring || !text) return;
+
+  const clampedProgress = Math.max(0, Math.min(1, progress || 0));
+  ring.style.strokeDasharray = String(PANIC_PROGRESS_CIRCUMFERENCE);
+  ring.style.strokeDashoffset = String(PANIC_PROGRESS_CIRCUMFERENCE * (1 - clampedProgress));
+  text.textContent = remainingMs > 0 ? `${Math.max(1, Math.ceil(remainingMs / 1000))}s` : '';
+}
+
+function syncPanicUiState() {
   const btn = document.getElementById('panicBtn');
   const label = document.getElementById('panicBtnLabel');
   const hint = document.getElementById('panicHint');
 
   if (!btn || !label || !hint) return;
 
-  btn.classList.toggle('active', active);
-  label.textContent = active ? 'Alert Sent' : 'Send Emergency Alert';
-  hint.textContent = active
-    ? 'Help is on the way. Tap again to cancel alert.'
-    : 'Hold to confirm - Sends to emergency contacts';
+  const hold = state.panicHold;
+  const holdRemainingMs = hold
+    ? Math.max(0, PANIC_HOLD_DURATION_MS - (Date.now() - hold.startedAt))
+    : 0;
+  const cooldownRemainingMs = getAlertCooldownRemainingMs();
+
+  btn.classList.toggle('active', state.alertActive);
+  btn.classList.toggle('holding', Boolean(hold));
+  btn.classList.toggle('cooldown', !state.alertActive && !hold && cooldownRemainingMs > 0);
+
+  if (state.alertActive) {
+    label.textContent = 'Alert Sent';
+    hint.textContent = 'Help is on the way. Tap again to cancel alert.';
+    setPanicProgress(0, 0);
+    return;
+  }
+
+  if (hold) {
+    const progress = Math.min(1, (Date.now() - hold.startedAt) / PANIC_HOLD_DURATION_MS);
+    label.textContent = 'Keep Holding';
+    hint.textContent = 'Release to cancel before the alert is sent.';
+    setPanicProgress(progress, holdRemainingMs);
+    return;
+  }
+
+  setPanicProgress(0, 0);
+
+  if (cooldownRemainingMs > 0) {
+    label.textContent = 'Alert Cooling Down';
+    hint.textContent = `Wait ${Math.ceil(cooldownRemainingMs / 1000)}s before sending another alert.`;
+    return;
+  }
+
+  label.textContent = 'Send Emergency Alert';
+  hint.textContent = 'Hold to confirm - sends to emergency contacts';
+}
+
+function showAlertCooldownNotice() {
+  const remainingMs = getAlertCooldownRemainingMs();
+  if (!remainingMs) return remainingMs;
+
+  if (Date.now() - state.lastAlertCooldownNoticeAt > 4000) {
+    showToast(`Alert cooldown active. Wait ${Math.ceil(remainingMs / 1000)}s before sending again.`, 'amber');
+    state.lastAlertCooldownNoticeAt = Date.now();
+  }
+  syncPanicUiState();
+  return remainingMs;
+}
+
+function spawnPanicRipple(button, event) {
+  if (!button) return;
+
+  const ripple = document.createElement('span');
+  ripple.className = 'panic-ripple';
+  const rect = button.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height);
+  const clientX = event && Number.isFinite(event.clientX) ? event.clientX : rect.left + rect.width / 2;
+  const clientY = event && Number.isFinite(event.clientY) ? event.clientY : rect.top + rect.height / 2;
+
+  ripple.style.cssText = `width:${size}px;height:${size}px;left:${clientX - rect.left - size / 2}px;top:${clientY - rect.top - size / 2}px`;
+  button.appendChild(ripple);
+  setTimeout(() => ripple.remove(), 600);
+}
+
+function stopPanicHoldLoop() {
+  if (!state.panicHold) return;
+
+  if (state.panicHold.timerId) {
+    clearTimeout(state.panicHold.timerId);
+  }
+
+  if (state.panicHold.rafId) {
+    cancelAnimationFrame(state.panicHold.rafId);
+  }
+}
+
+function cancelPanicHold(options) {
+  if (!state.panicHold) return;
+
+  const cfg = options || {};
+  stopPanicHoldLoop();
+  state.panicHold = null;
+
+  if (!cfg.silent) {
+    showToast('Emergency hold cancelled.', 'amber');
+  }
+
+  syncPanicUiState();
+}
+
+function tickPanicHoldProgress() {
+  if (!state.panicHold) return;
+
+  syncPanicUiState();
+  state.panicHold.rafId = requestAnimationFrame(() => {
+    tickPanicHoldProgress();
+  });
+}
+
+function completePanicHold() {
+  if (!state.panicHold) return;
+
+  stopPanicHoldLoop();
+  state.panicHold = null;
+  state.panicClickSuppressedUntil = Date.now() + 750;
+  syncPanicUiState();
+
+  cancelCountdown(true);
+  void sendEmergencyAlert('Manual panic button pressed.', {
+    source: 'panic-button',
+    allowCall: true,
+    openAllChannels: true,
+  });
+}
+
+function startPanicHold(button, event, source) {
+  if (!button || state.alertActive || state.panicHold) return;
+
+  if (isAlertCoolingDown()) {
+    showAlertCooldownNotice();
+    return;
+  }
+
+  spawnPanicRipple(button, event);
+  state.panicHold = {
+    startedAt: Date.now(),
+    timerId: setTimeout(() => {
+      completePanicHold();
+    }, PANIC_HOLD_DURATION_MS),
+    rafId: null,
+    source: source || 'pointer',
+  };
+
+  syncPanicUiState();
+  tickPanicHoldProgress();
+}
+
+function cancelActiveAlert() {
+  if (!state.alertActive) return;
+
+  clearAlertResetTimer();
+  setPanicUiState(false);
+  state.conversation = 'routine';
+  updateBanner();
+  showToast('Emergency alert cancelled.');
+  logEvent({
+    title: 'Alert cancelled manually',
+    detail: 'User cancelled the active emergency alert.',
+    icon: 'fas fa-circle-xmark',
+    accent: '#F0A03A',
+  });
+}
+
+function handlePanicPointerDown(event) {
+  if (!event.isPrimary || event.button !== 0) return;
+  if (state.alertActive) return;
+
+  event.preventDefault();
+  startPanicHold(event.currentTarget, event, 'pointer');
+}
+
+function handlePanicPointerUp() {
+  if (!state.panicHold || state.panicHold.source !== 'pointer') return;
+  cancelPanicHold({ silent: true });
+}
+
+function handlePanicPointerCancel() {
+  if (!state.panicHold || state.panicHold.source !== 'pointer') return;
+  cancelPanicHold({ silent: true });
+}
+
+function handlePanicKeyDown(event) {
+  if (event.repeat) return;
+  if (event.key !== ' ' && event.key !== 'Enter') return;
+
+  event.preventDefault();
+  if (state.alertActive) return;
+  startPanicHold(event.currentTarget, null, 'keyboard');
+}
+
+function handlePanicKeyUp(event) {
+  if (event.key !== ' ' && event.key !== 'Enter') return;
+
+  event.preventDefault();
+
+  if (Date.now() < state.panicClickSuppressedUntil) {
+    return;
+  }
+
+  if (state.alertActive) {
+    cancelActiveAlert();
+    return;
+  }
+
+  if (!state.panicHold || state.panicHold.source !== 'keyboard') return;
+  cancelPanicHold({ silent: true });
+}
+
+function handlePanicBlur() {
+  cancelPanicHold({ silent: true });
+}
+
+function handlePanicClick(event) {
+  if (Date.now() < state.panicClickSuppressedUntil) {
+    event.preventDefault();
+    return;
+  }
+
+  if (state.alertActive) {
+    event.preventDefault();
+    cancelActiveAlert();
+    return;
+  }
+
+  event.preventDefault();
 }
 
 function hasReachableContactRoute(contact) {
@@ -2696,16 +3108,74 @@ function hasReachableContactRoute(contact) {
 }
 
 /* â”€â”€ CLASSIFICATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function normalizeSpeechForMatching(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9\s-]+/g, ' ')
+    .replace(/-/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeSpeech(value) {
+  const normalized = normalizeSpeechForMatching(value);
+  return normalized ? normalized.split(' ') : [];
+}
+
+function hasTokenSequence(tokens, sequence, startIndex) {
+  for (let offset = 0; offset < sequence.length; offset++) {
+    if (tokens[startIndex + offset] !== sequence[offset]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasNegationBefore(tokens, startIndex) {
+  const from = Math.max(0, startIndex - NEGATION_WINDOW_WORDS);
+  for (let index = from; index < startIndex; index++) {
+    if (NEGATION_TOKENS.has(tokens[index])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findSignalMatch(tokens, signals) {
+  for (const signal of signals) {
+    const signalTokens = tokenizeSpeech(signal);
+    if (!signalTokens.length || signalTokens.length > tokens.length) continue;
+
+    for (let startIndex = 0; startIndex <= tokens.length - signalTokens.length; startIndex++) {
+      if (!hasTokenSequence(tokens, signalTokens, startIndex)) continue;
+      if (hasNegationBefore(tokens, startIndex)) continue;
+      return signal;
+    }
+  }
+
+  return '';
+}
+
 function classifyPhrase(phrase) {
-  const p = phrase.toLowerCase();
-  const cw = state.codeWord.toLowerCase().trim();
-  if (cw && p.includes(cw)) return 'danger';
-  if (DANGER_SIGNALS.some(s => p.includes(s)))  return 'danger';
-  if (CONCERN_SIGNALS.some(s => p.includes(s))) return 'concern';
+  const tokens = tokenizeSpeech(phrase);
+  if (!tokens.length) return 'routine';
+
+  const codeWordTokens = tokenizeSpeech(state.codeWord);
+  if (codeWordTokens.length) {
+    for (let startIndex = 0; startIndex <= tokens.length - codeWordTokens.length; startIndex++) {
+      if (hasTokenSequence(tokens, codeWordTokens, startIndex)) {
+        return 'danger';
+      }
+    }
+  }
+
+  if (findSignalMatch(tokens, DANGER_SIGNALS)) return 'danger';
+  if (findSignalMatch(tokens, CONCERN_SIGNALS)) return 'concern';
   return 'routine';
 }
 
-function analysePhrase(spokenPhrase) {
+async function analysePhrase(spokenPhrase) {
   const phrase = (spokenPhrase || state.voiceTranscript || '').trim();
   if (!phrase) {
     showToast('Let voice monitoring run and speak a phrase for Safety AI to analyse.');
@@ -2720,11 +3190,20 @@ function analysePhrase(spokenPhrase) {
   aiEl.className = 'ai-response ' + cls;
 
   if (cls === 'danger') {
-    aiEl.textContent = 'Danger signals detected. Emergency alert sent immediately.';
     cancelCountdown(true);
-    logEvent({ title: 'Danger phrase detected', detail: `"${phrase}" - emergency alert dispatched immediately.`, icon: 'fas fa-triangle-exclamation', accent: '#D65A3F' });
-    if (!state.alertActive) {
-      sendEmergencyAlert('Safety AI detected a dangerous conversation.', { source: 'safety-ai' });
+    const alertResult = await sendEmergencyAlert('Safety AI detected a dangerous conversation.', { source: 'safety-ai' });
+    if (alertResult && alertResult.sent) {
+      aiEl.textContent = 'Danger signals detected. Emergency alert sent immediately.';
+      logEvent({ title: 'Danger phrase detected', detail: `"${phrase}" - emergency alert dispatched immediately.`, icon: 'fas fa-triangle-exclamation', accent: '#D65A3F' });
+    } else if (alertResult && alertResult.reason === 'cooldown') {
+      aiEl.textContent = `Danger signals detected. Another alert was already sent, so WearGuard is waiting ${Math.ceil(alertResult.remainingMs / 1000)}s before sending again.`;
+      logEvent({ title: 'Danger phrase detected during cooldown', detail: `"${phrase}" - repeat alert suppressed while cooldown is active.`, icon: 'fas fa-clock', accent: '#F0A03A' });
+    } else if (alertResult && alertResult.reason === 'active') {
+      aiEl.textContent = 'Danger signals detected. An emergency alert is already active.';
+      logEvent({ title: 'Danger phrase detected during active alert', detail: `"${phrase}" - WearGuard kept the existing active alert in place.`, icon: 'fas fa-siren-on', accent: '#D65A3F' });
+    } else {
+      aiEl.textContent = 'Danger signals detected. WearGuard could not deliver another alert yet.';
+      logEvent({ title: 'Danger phrase detected', detail: `"${phrase}" - alert could not be delivered yet.`, icon: 'fas fa-triangle-exclamation', accent: '#D65A3F' });
     }
   } else if (cls === 'concern') {
     aiEl.textContent = 'Concern signals detected. Safety AI is watching. Tap the panic button if you need help.';
@@ -2783,7 +3262,7 @@ function initVoiceRecognition() {
     updateVoiceUI();
 
     if (finalText) {
-      analysePhrase(finalText);
+      void analysePhrase(finalText);
     }
   };
 
@@ -3042,7 +3521,7 @@ function autoSendAlert() {
   state.countdown = null;
   document.getElementById('countdownBar').classList.remove('active');
   if (!state.alertActive) {
-    sendEmergencyAlert('Safety AI detected a dangerous conversation.', { source: 'safety-ai' });
+    void sendEmergencyAlert('Safety AI detected a dangerous conversation.', { source: 'safety-ai' });
   }
 }
 
@@ -3152,7 +3631,18 @@ function legacyHandlePanicMock(e) {
 
 /* â”€â”€ HEART RATE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 async function sendEmergencyAlert(reason, options) {
-  if (state.alertActive) return;
+  if (state.alertActive) {
+    return { sent: false, reason: 'active' };
+  }
+
+  if (isAlertCoolingDown()) {
+    const remainingMs = showAlertCooldownNotice();
+    return {
+      sent: false,
+      reason: 'cooldown',
+      remainingMs,
+    };
+  }
 
   const cfg = options || {};
   const primary = state.contacts.find(c => c.primary) || state.contacts[0] || null;
@@ -3164,10 +3654,10 @@ async function sendEmergencyAlert(reason, options) {
       icon: 'fas fa-circle-exclamation',
       accent: '#F0A03A',
     });
-    return;
+    return { sent: false, reason: 'no-contact' };
   }
 
-  state.alertActive = true;
+  cancelPanicHold({ silent: true });
   setPanicUiState(true);
   updateBanner();
 
@@ -3191,7 +3681,6 @@ async function sendEmergencyAlert(reason, options) {
   const sentAny = relayResult.delivered || deliveredChannels.length > 0;
 
   if (!sentAny) {
-    state.alertActive = false;
     setPanicUiState(false);
     updateBanner();
     showToast('No real delivery route is configured yet.', 'amber');
@@ -3201,9 +3690,11 @@ async function sendEmergencyAlert(reason, options) {
       icon: 'fas fa-triangle-exclamation',
       accent: '#F0A03A',
     });
-    return;
+    return { sent: false, reason: 'undeliverable' };
   }
 
+  state.lastAlertSentAt = Date.now();
+  startAlertCooldownTimer();
   const recipient = primary.name;
   const channelSummary = relayResult.delivered ? 'secure relay' : deliveredChannels.join(', ');
   const locationSummary = location ? ` Location: ${formatLocationText(location)}.` : ' Location unavailable.';
@@ -3216,45 +3707,13 @@ async function sendEmergencyAlert(reason, options) {
   showToast(`Emergency alert sent via ${channelSummary || 'contact route'}.`, 'coral');
   updateBanner();
 
-  setTimeout(() => {
-    state.alertActive = false;
-    setPanicUiState(false);
-    state.conversation = 'routine';
-    updateBanner();
-  }, 8000);
-}
-
-function handlePanic(e) {
-  const btn = e.currentTarget;
-  const ripple = document.createElement('span');
-  ripple.className = 'panic-ripple';
-  const rect = btn.getBoundingClientRect();
-  const size = Math.max(rect.width, rect.height);
-  ripple.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX-rect.left-size/2}px;top:${e.clientY-rect.top-size/2}px`;
-  btn.appendChild(ripple);
-  setTimeout(() => ripple.remove(), 600);
-
-  if (state.alertActive) {
-    state.alertActive = false;
-    setPanicUiState(false);
-    state.conversation = 'routine';
-    updateBanner();
-    showToast('Emergency alert cancelled.');
-    logEvent({
-      title: 'Alert cancelled manually',
-      detail: 'User cancelled the active emergency alert.',
-      icon: 'fas fa-circle-xmark',
-      accent: '#F0A03A',
-    });
-    return;
-  }
-
-  cancelCountdown(true);
-  sendEmergencyAlert('Manual panic button pressed.', {
-    source: 'panic-button',
-    allowCall: true,
-    openAllChannels: true,
-  });
+  scheduleAlertReset();
+  return {
+    sent: true,
+    reason: 'sent',
+    relayDelivered: relayResult.delivered,
+    deliveredChannels,
+  };
 }
 
 function simulateHighHR() {
@@ -3840,6 +4299,7 @@ function renderAll() {
   updateHRDisplay();
   updateBanner();
   updateChips();
+  syncPanicUiState();
   updateVoiceUI();
   renderContacts();
   updateShareContactSelect();

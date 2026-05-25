@@ -72,11 +72,42 @@ body {
 body.auth-locked {
   overflow: hidden;
 }
+body.dashboard-entering {
+  overflow-x: hidden;
+}
+body:not(.auth-locked) .app-wrap,
+body:not(.auth-locked) .panic-dock,
 body.auth-locked .app-wrap,
 body.auth-locked .panic-dock {
-  filter: blur(12px);
+  transition:
+    filter .42s cubic-bezier(.4,0,.2,1),
+    opacity .42s cubic-bezier(.4,0,.2,1),
+    transform .52s cubic-bezier(.2,.8,.2,1);
+}
+body.auth-locked .app-wrap,
+body.auth-locked .panic-dock {
+  filter: blur(18px);
+  opacity: .14;
+  transform: translateY(24px) scale(.985);
   pointer-events: none;
   user-select: none;
+}
+body.dashboard-entering .app-wrap,
+body.dashboard-entering .panic-dock {
+  animation: dashboard-arrive .58s cubic-bezier(.18,.88,.25,1) both;
+}
+
+@keyframes dashboard-arrive {
+  0% {
+    opacity: .16;
+    transform: translateY(22px) scale(.985);
+    filter: blur(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
 }
 
 /* AUTH GATE */
@@ -1242,7 +1273,7 @@ header {
   z-index: 200;
 }
 .panic-btn {
-  width: 100%; padding: 18px;
+  width: 100%; padding: 18px 82px 18px 18px;
   background: var(--coral);
   border: none; border-radius: var(--radius-lg);
   font-family: 'DM Sans', sans-serif;
@@ -1254,6 +1285,17 @@ header {
   transition: var(--trans);
   position: relative; overflow: hidden;
 }
+.panic-btn-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+}
+.panic-btn:focus-visible {
+  outline: 2px solid rgba(255,255,255,.86);
+  outline-offset: 2px;
+}
 .panic-btn::before {
   content: ''; position: absolute; inset: 0;
   background: rgba(255,255,255,0);
@@ -1261,11 +1303,63 @@ header {
 }
 .panic-btn:hover::before { background: rgba(255,255,255,.08); }
 .panic-btn:active { transform: scale(.97); }
+.panic-btn.holding {
+  background: #BE4E39;
+  box-shadow: 0 12px 32px rgba(190,78,57,.42);
+}
+.panic-btn.cooldown {
+  background: #B6765F;
+  box-shadow: 0 10px 26px rgba(124,77,59,.28);
+}
 .panic-btn.active {
   background: var(--forest);
   box-shadow: 0 8px 28px rgba(22,59,53,.3);
 }
 .panic-btn .btn-icon { font-size: 20px; }
+.panic-progress {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%) scale(.92);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.panic-btn.holding .panic-progress {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+.panic-progress-svg {
+  width: 42px;
+  height: 42px;
+  transform: rotate(-90deg);
+}
+.panic-progress-track,
+.panic-progress-ring {
+  fill: none;
+  stroke-width: 4;
+}
+.panic-progress-track {
+  stroke: rgba(255,255,255,.2);
+}
+.panic-progress-ring {
+  stroke: rgba(255,255,255,.94);
+  stroke-linecap: round;
+  stroke-dasharray: 126;
+  stroke-dashoffset: 126;
+  transition: stroke-dashoffset .08s linear;
+}
+.panic-progress-text {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  color: var(--white);
+}
 .panic-ripple {
   position: absolute; border-radius: 50%;
   background: rgba(255,255,255,.25);
