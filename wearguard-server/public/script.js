@@ -12,6 +12,7 @@ const state = {
   locationSharing: false,
   locationTimer: null,
   locationStatusTimer: null,
+  locationAutoRelayEnabled: false,
   locationContact: null,
   locationContactId: null,
   locationWatchId: null,
@@ -399,12 +400,28 @@ function bindUiActions() {
     contactsList.dataset.bound = 'true';
   }
 
+  const securityWebhookInput = document.getElementById('securityWebhookUrlInput');
+  if (securityWebhookInput && securityWebhookInput.dataset.bound !== 'true') {
+    securityWebhookInput.addEventListener('input', handleSecurityWebhookInput);
+    securityWebhookInput.dataset.bound = 'true';
+  }
+
   if (document.body && document.body.dataset.visibilityBound !== 'true') {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     document.body.dataset.visibilityBound = 'true';
   }
 
   bindSecurityPanel();
+}
+
+function handleSecurityWebhookInput(event) {
+  const target = event.target;
+  if (!target) return;
+
+  state.security.securityWebhookUrl = target.value.trim();
+  persistSettings();
+  renderSecurityOverview();
+  renderSecurityAssessmentSummary();
 }
 
 function bindClick(id, handler) {
@@ -1135,11 +1152,13 @@ function clearProtectedRuntimeState() {
   state.pageHiddenAt = 0;
   state.voiceRestartBlockedByHidden = false;
   state.alertActive = false;
+  state.heartRate = null;
   state.lastAlertSentAt = 0;
   state.lastAlertCooldownNoticeAt = 0;
   state.lastCyberAlertSentAt = 0;
   state.panicClickSuppressedUntil = 0;
   state.localDevWarningShown = false;
+  state.developerMode = false;
   state.lastLocation = null;
   state.security = createDefaultSecurityState();
   state.wearable.connectedDevice = null;
@@ -1292,6 +1311,8 @@ function resetWearableLink(message) {
   state.wearable.source = 'standby';
   state.wearable.batteryLevel = null;
   state.wearable.signalStrength = null;
+  state.wearable.lastSyncAt = null;
+  state.heartRate = null;
 }
 
 function createDemoWearableList() {
@@ -1997,6 +2018,7 @@ function getSecurityAutoControls() {
 function getSecurityIntegrationStatuses() {
   const hasSecureSession = Boolean(state.authProfile && state.storageKey);
   const primaryContact = getPrimaryContact();
+  const securityWebhookUrl = getSecurityWebhookUrl();
   const hasCrypto = Boolean(window.crypto && window.crypto.subtle);
   const secureContext = Boolean(window.isSecureContext);
   const localDev = isLocalDevelopmentHost() || isLocalDevelopmentSessionActive();
@@ -2020,10 +2042,14 @@ function getSecurityIntegrationStatuses() {
     },
     {
       title: 'Alert delivery',
-      status: primaryContact ? 'warn' : 'fail',
-      detail: primaryContact
-        ? 'Emergency routing has a primary recipient, but production still needs authenticated relay and delivery ownership.'
-        : 'No primary contact is configured, so emergency delivery is not operational yet.',
+      status: primaryContact || securityWebhookUrl ? 'warn' : 'fail',
+      detail: primaryContact || securityWebhookUrl
+        ? primaryContact && securityWebhookUrl
+          ? 'Emergency routing has both a human contact path and a cyber-response webhook, but production still needs authenticated relay ownership.'
+          : primaryContact
+            ? 'Emergency routing has a primary recipient, but production still needs authenticated relay and delivery ownership.'
+            : 'A cyber-response webhook is configured, but a human emergency contact path should still be validated.'
+        : 'No primary contact or outbound security webhook is configured, so emergency delivery is not operational yet.',
     },
     {
       title: 'Protected data',
@@ -2045,6 +2071,13 @@ function getSecurityIntegrationStatuses() {
       title: 'Permission journeys',
       status: secureContext ? 'pass' : 'warn',
       detail: 'Bluetooth, microphone, and location prompts should be verified on the target browsers and devices.',
+    },
+    {
+      title: 'Cyber webhook',
+      status: securityWebhookUrl ? 'pass' : 'warn',
+      detail: securityWebhookUrl
+        ? 'A SIEM or IT webhook is configured for danger and cyber-coercion escalation telemetry.'
+        : 'Configure an outbound security webhook if cyber-coercion events should flow to a SIEM or IT response team.',
     },
   ];
 }
@@ -2089,8 +2122,8 @@ function getSecurityRequirementCards() {
     },
     {
       title: 'Secure Integration',
-      completed: integrationReviewed + (state.security.integrationNotes ? 1 : 0),
-      total: SECURITY_INTEGRATION_REVIEW_ITEMS.length + 1,
+      completed: integrationReviewed + (state.security.integrationNotes ? 1 : 0) + (state.security.securityWebhookUrl ? 1 : 0),
+      total: SECURITY_INTEGRATION_REVIEW_ITEMS.length + 2,
     },
   ].map((card) => {
     const ratio = card.total ? card.completed / card.total : 0;
@@ -2209,6 +2242,7 @@ function renderSecurityOverview() {
   syncInputValue('securityDataSelect', state.security.dataSensitivity);
   syncInputValue('securityIntegrationSelect', state.security.integrationCriticality);
   syncInputValue('securitySurfaceSelect', state.security.attackSurface);
+  syncInputValue('securityWebhookUrlInput', state.security.securityWebhookUrl);
   syncInputValue('securityDesignNotesInput', state.security.designReviewNotes);
   syncInputValue('securityIntegrationNotesInput', state.security.integrationNotes);
 
@@ -2402,6 +2436,7 @@ function renderSecurityAssessmentSummary() {
 function runSecurityReview() {
   const findings = [];
   const primaryContact = getPrimaryContact();
+  const securityWebhookUrl = getSecurityWebhookUrl();
   const threatReviewed = countCheckedValues(state.security.threatReviews);
   const codingReviewed = countCheckedValues(state.security.secureCodingReviews);
   const integrationReviewed = countCheckedValues(state.security.integrationReviews);
@@ -2487,13 +2522,13 @@ function runSecurityReview() {
     });
   }
 
-  if (integrationReviewed === SECURITY_INTEGRATION_REVIEW_ITEMS.length && primaryContact) {
+  if (integrationReviewed === SECURITY_INTEGRATION_REVIEW_ITEMS.length && (primaryContact || securityWebhookUrl)) {
     findings.push({
       status: 'pass',
       title: 'Integration readiness looks healthy',
-      detail: 'Integration review items are signed off and emergency routing has at least one primary recipient.',
+      detail: 'Integration review items are signed off and emergency routing has at least one validated escalation path.',
     });
-  } else if (primaryContact) {
+  } else if (primaryContact || securityWebhookUrl) {
     findings.push({
       status: 'warn',
       title: 'Integration sign-off is incomplete',
@@ -2503,7 +2538,7 @@ function runSecurityReview() {
     findings.push({
       status: 'fail',
       title: 'Emergency delivery is not operational yet',
-      detail: 'No primary contact is configured, so the integration path for real alerts is incomplete.',
+      detail: 'No primary contact or outbound security webhook is configured, so the integration path for real alerts is incomplete.',
     });
   }
 
@@ -2604,7 +2639,7 @@ function formatLocationText(location) {
 }
 
 function formatHeartRateText(value) {
-  return Number.isFinite(value) ? `${value} BPM` : 'Watch not connected';
+  return Number.isFinite(value) ? `${value} BPM` : '-- BPM';
 }
 
 function getLocationErrorMessage(error) {
@@ -2641,10 +2676,23 @@ function buildEmergencyPayload(reason, location, source) {
     codeWord: state.codeWord || '',
     timestamp: new Date().toISOString(),
     location,
+    securityWebhookUrl: getSecurityWebhookUrl(),
     wearable: getWearableForPayload(),
     contacts: state.contacts.map(({ name, phone, whatsapp, email, primary }) => ({
       name, phone, whatsapp, email, primary,
     })),
+  };
+}
+
+function buildCyberPayload(transcript, location) {
+  return {
+    type: 'cyber-coercion',
+    app: 'WearGuard',
+    transcript: transcript || state.voiceTranscript || '',
+    heartRate: getHeartRateForPayload(),
+    location,
+    timestamp: new Date().toISOString(),
+    securityWebhookUrl: getSecurityWebhookUrl(),
   };
 }
 
@@ -2716,11 +2764,16 @@ async function postWebhook(url, payload) {
   }
 }
 
-async function dispatchSecurePayload(kind, payload) {
+function getSecurityWebhookUrl() {
+  const url = String(state.security.securityWebhookUrl || '').trim();
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
+async function dispatchPayloadRequest(endpoint, body) {
   try {
-    const result = await apiRequest(DISPATCH_ENDPOINT, {
+    const result = await apiRequest(endpoint, {
       method: 'POST',
-      body: { kind, payload },
+      body,
     });
 
     return {
@@ -2961,6 +3014,55 @@ function stopPanicHoldLoop() {
   }
 }
 
+async function dispatchSecurePayload(kind, payload) {
+  return dispatchPayloadRequest(DISPATCH_ENDPOINT, {
+    kind,
+    payload,
+    securityWebhookUrl: getSecurityWebhookUrl(),
+  });
+}
+
+async function dispatchCyberAlert(transcript) {
+  const remainingMs = Math.max(0, CYBER_ALERT_COOLDOWN_MS - (Date.now() - state.lastCyberAlertSentAt));
+  if (remainingMs > 0) {
+    return {
+      sent: false,
+      reason: 'cooldown',
+      remainingMs,
+    };
+  }
+
+  let location = null;
+  try {
+    location = await getCurrentLocation();
+  } catch (error) {
+    location = null;
+  }
+
+  const payload = buildCyberPayload(transcript, location);
+  const relayResult = await dispatchPayloadRequest(CYBER_DISPATCH_ENDPOINT, {
+    ...payload,
+    securityWebhookUrl: getSecurityWebhookUrl(),
+  });
+  const webhookDelivered = payload.securityWebhookUrl
+    ? await postWebhook(payload.securityWebhookUrl, payload)
+    : false;
+  const sent = relayResult.delivered || webhookDelivered;
+
+  if (sent) {
+    state.lastCyberAlertSentAt = Date.now();
+  }
+
+  return {
+    sent,
+    reason: sent ? 'sent' : relayResult.unauthorized ? 'unauthorized' : 'undeliverable',
+    relayDelivered: relayResult.delivered,
+    webhookDelivered,
+    message: relayResult.message,
+    payload,
+  };
+}
+
 function cancelPanicHold(options) {
   if (!state.panicHold) return;
 
@@ -3171,6 +3273,7 @@ function classifyPhrase(phrase) {
   }
 
   if (findSignalMatch(tokens, DANGER_SIGNALS)) return 'danger';
+  if (findSignalMatch(tokens, CYBER_SIGNALS)) return 'cyber';
   if (findSignalMatch(tokens, CONCERN_SIGNALS)) return 'concern';
   return 'routine';
 }
@@ -3204,6 +3307,18 @@ async function analysePhrase(spokenPhrase) {
     } else {
       aiEl.textContent = 'Danger signals detected. WearGuard could not deliver another alert yet.';
       logEvent({ title: 'Danger phrase detected', detail: `"${phrase}" - alert could not be delivered yet.`, icon: 'fas fa-triangle-exclamation', accent: '#D65A3F' });
+    }
+  } else if (cls === 'cyber') {
+    const cyberResult = await dispatchCyberAlert(phrase);
+    if (cyberResult && cyberResult.sent) {
+      aiEl.textContent = 'Cyber-coercion signals detected. WearGuard logged the event and forwarded it to your cyber response path.';
+      logEvent({ title: 'Cyber coercion detected', detail: `"${phrase}" - cyber-coercion event forwarded for response.`, icon: 'fas fa-user-secret', accent: '#7C3AED' });
+    } else if (cyberResult && cyberResult.reason === 'cooldown') {
+      aiEl.textContent = `Cyber-coercion signals detected. A recent cyber alert is still cooling down for ${Math.ceil(cyberResult.remainingMs / 1000)}s.`;
+      logEvent({ title: 'Cyber coercion detected during cooldown', detail: `"${phrase}" - repeat cyber alert suppressed while cooldown is active.`, icon: 'fas fa-shield-virus', accent: '#7C3AED' });
+    } else {
+      aiEl.textContent = 'Cyber-coercion signals detected. WearGuard logged the event, but no cyber dispatch route is configured yet.';
+      logEvent({ title: 'Cyber coercion detected', detail: `"${phrase}" - cyber event logged without a reachable dispatch route.`, icon: 'fas fa-shield-virus', accent: '#7C3AED' });
     }
   } else if (cls === 'concern') {
     aiEl.textContent = 'Concern signals detected. Safety AI is watching. Tap the panic button if you need help.';
@@ -3323,13 +3438,52 @@ function clearVoiceRestartTimer() {
   state.voiceRestartPending = false;
 }
 
+function hasPageBeenHiddenTooLong() {
+  return Boolean(
+    state.pageHiddenAt &&
+    (Date.now() - state.pageHiddenAt) >= PAGE_HIDDEN_RESTART_BLOCK_MS
+  );
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    state.pageHiddenAt = Date.now();
+    return;
+  }
+
+  const hiddenTooLong = hasPageBeenHiddenTooLong();
+  state.pageHiddenAt = 0;
+
+  if (!hiddenTooLong) return;
+
+  state.voiceRestartBlockedByHidden = false;
+  if (state.voiceAutoMode && !state.voicePermissionBlocked && !state.voiceListening && !state.authLocked) {
+    startVoiceRecognition({ silent: true });
+  } else {
+    updateVoiceUI();
+  }
+}
+
 function scheduleVoiceRecognitionRestart() {
   if (state.voiceRestartTimer || !state.voiceSupported || state.voiceListening || !state.voiceAutoMode || state.authLocked) return;
+
+  if (document.visibilityState === 'hidden' && hasPageBeenHiddenTooLong()) {
+    state.voiceRestartBlockedByHidden = true;
+    state.voiceRestartPending = false;
+    updateVoiceUI();
+    return;
+  }
+
   state.voiceRestartPending = true;
   updateVoiceUI();
   state.voiceRestartTimer = setTimeout(() => {
     state.voiceRestartTimer = null;
     state.voiceRestartPending = false;
+    if (document.visibilityState === 'hidden' && hasPageBeenHiddenTooLong()) {
+      state.voiceRestartBlockedByHidden = true;
+      updateVoiceUI();
+      return;
+    }
     startVoiceRecognition({ silent: true });
   }, VOICE_RESTART_DELAY_MS);
 }
@@ -3355,6 +3509,7 @@ function startVoiceRecognition(options) {
   }
 
   clearVoiceRestartTimer();
+  state.voiceRestartBlockedByHidden = false;
 
   try {
     state.voiceInterim = '';
@@ -3375,6 +3530,7 @@ function stopVoiceRecognition(manual) {
   if (manual) {
     state.voiceAutoMode = false;
     state.voicePermissionBlocked = false;
+    state.voiceRestartBlockedByHidden = false;
   }
   clearVoiceRestartTimer();
 
@@ -3455,6 +3611,21 @@ function updateVoiceUI() {
       voiceTranscript.className = 'voice-transcript placeholder';
     }
     voiceHelper.textContent = 'Allow microphone access in the browser, then use the button to start always-on listening again.';
+    return;
+  }
+
+  if (state.voiceRestartBlockedByHidden) {
+    voiceStateText.textContent = 'Background paused';
+    voiceListenBtn.innerHTML = '<i class="fas fa-eye"></i> Return to resume';
+    if (state.voiceTranscript) {
+      voiceTranscript.textContent = state.voiceTranscript;
+      voiceTranscript.className = 'voice-transcript has-text';
+    } else {
+      voiceTranscript.textContent = 'Voice monitoring paused because this tab stayed hidden for more than one minute.';
+      voiceTranscript.className = 'voice-transcript placeholder';
+    }
+    voiceHelper.textContent = 'Bring WearGuard back to the foreground to let automatic voice monitoring resume.';
+    voiceListenBtn.disabled = document.visibilityState === 'hidden';
     return;
   }
 
@@ -3646,16 +3817,7 @@ async function sendEmergencyAlert(reason, options) {
 
   const cfg = options || {};
   const primary = state.contacts.find(c => c.primary) || state.contacts[0] || null;
-  if (!primary) {
-    showToast('Add a primary contact first.', 'amber');
-    logEvent({
-      title: 'Emergency alert blocked',
-      detail: 'No primary contact is configured yet.',
-      icon: 'fas fa-circle-exclamation',
-      accent: '#F0A03A',
-    });
-    return { sent: false, reason: 'no-contact' };
-  }
+  const securityWebhookUrl = getSecurityWebhookUrl();
 
   cancelPanicHold({ silent: true });
   setPanicUiState(true);
@@ -3678,7 +3840,13 @@ async function sendEmergencyAlert(reason, options) {
         openAll: Boolean(cfg.openAllChannels),
       })
     : [];
-  const sentAny = relayResult.delivered || deliveredChannels.length > 0;
+  const webhookDelivered = securityWebhookUrl
+    ? await postWebhook(securityWebhookUrl, {
+        kind: 'emergency-alert',
+        payload,
+      })
+    : false;
+  const sentAny = relayResult.delivered || deliveredChannels.length > 0 || webhookDelivered;
 
   if (!sentAny) {
     setPanicUiState(false);
@@ -3686,7 +3854,7 @@ async function sendEmergencyAlert(reason, options) {
     showToast('No real delivery route is configured yet.', 'amber');
     logEvent({
       title: 'Emergency alert failed',
-      detail: 'Add WhatsApp, email, or phone details to send alerts.',
+      detail: 'Add a reachable contact, server relay, or outbound security webhook to send alerts.',
       icon: 'fas fa-triangle-exclamation',
       accent: '#F0A03A',
     });
@@ -3695,8 +3863,19 @@ async function sendEmergencyAlert(reason, options) {
 
   state.lastAlertSentAt = Date.now();
   startAlertCooldownTimer();
-  const recipient = primary.name;
-  const channelSummary = relayResult.delivered ? 'secure relay' : deliveredChannels.join(', ');
+  if (state.locationSharing && state.locationAutoRelayEnabled && state.locationContactId) {
+    const shareContact = state.contacts.find((contact) => contact.id == state.locationContactId);
+    if (shareContact) {
+      scheduleLocationStatusUpdates(shareContact.name, true);
+      scheduleLocationDispatch(shareContact);
+    }
+  }
+  const channels = [];
+  if (relayResult.delivered) channels.push('secure relay');
+  if (deliveredChannels.length) channels.push(...deliveredChannels);
+  if (webhookDelivered) channels.push('security webhook');
+  const recipient = primary ? primary.name : 'configured response routes';
+  const channelSummary = channels.join(', ');
   const locationSummary = location ? ` Location: ${formatLocationText(location)}.` : ' Location unavailable.';
   logEvent({
     title: 'Emergency alert sent',
@@ -3713,6 +3892,7 @@ async function sendEmergencyAlert(reason, options) {
     reason: 'sent',
     relayDelivered: relayResult.delivered,
     deliveredChannels,
+    webhookDelivered,
   };
 }
 
@@ -3752,18 +3932,22 @@ function updateHRDisplay() {
     hrNumber.className = 'hr-number offline';
     bar.style.width = waitingStatus === 'syncing' ? '34%' : waitingStatus === 'pairing' ? '22%' : waitingStatus === 'scanning' ? '14%' : '6%';
     bar.className = 'hr-bar muted';
-    hrChipValue.textContent = waitingStatus === 'scanning'
-      ? 'Scanning...'
-      : waitingStatus === 'selecting'
-        ? 'Choose watch'
-        : waitingStatus === 'pairing'
-          ? 'Pairing...'
-          : waitingStatus === 'syncing'
-            ? 'Syncing sensor'
-            : 'Watch offline';
+    hrChipValue.textContent = '-- BPM';
     hrChipIcon.style.color = 'rgba(22,59,53,.35)';
     simBtn.disabled = true;
     simBtn.innerHTML = '<i class="fas fa-tower-broadcast"></i> Connect a watch to simulate a stress event';
+    return;
+  }
+
+  if (!Number.isFinite(state.heartRate)) {
+    hrNumber.textContent = '--';
+    hrNumber.className = 'hr-number offline';
+    bar.style.width = '10%';
+    bar.className = 'hr-bar muted';
+    hrChipValue.textContent = '-- BPM';
+    hrChipIcon.style.color = 'rgba(22,59,53,.35)';
+    simBtn.disabled = true;
+    simBtn.innerHTML = '<i class="fas fa-wave-square"></i> Waiting for live heart-rate data';
     return;
   }
 
@@ -4003,13 +4187,118 @@ async function sendLocationPayload(contact, context, options) {
   };
 }
 
+function isRapidAlertLocationWindowActive() {
+  return Boolean(
+    state.lastAlertSentAt &&
+    (Date.now() - state.lastAlertSentAt) <= RAPID_ALERT_LOCATION_WINDOW_MS
+  );
+}
+
+function getNextLocationDispatchDelayMs() {
+  if (isRapidAlertLocationWindowActive()) {
+    return RAPID_ALERT_LOCATION_INTERVAL_MS;
+  }
+
+  const jitter = Math.floor(Math.random() * ((LOCATION_UPDATE_JITTER_MS * 2) + 1)) - LOCATION_UPDATE_JITTER_MS;
+  return Math.max(12 * 1000, LOCATION_UPDATE_INTERVAL_MS + jitter);
+}
+
+function buildLocationShareStatus(contactName, autoRelayEnabled) {
+  const rem = state.locationShareEndsAt ? state.locationShareEndsAt - Date.now() : 0;
+  const minsRemaining = rem > 0 ? Math.max(1, Math.ceil(rem / 60000)) : 0;
+
+  if (!autoRelayEnabled) {
+    return `Sharing with ${contactName} - manual updates only${minsRemaining ? ` - ${minsRemaining}m left` : ''}`;
+  }
+
+  if (isRapidAlertLocationWindowActive()) {
+    return `Sharing with ${contactName} - auto relay every 12s during the active alert window${minsRemaining ? ` - ${minsRemaining}m left` : ''}`;
+  }
+
+  return `Sharing with ${contactName} - auto relay about every minute${minsRemaining ? ` - ${minsRemaining}m left` : ''}`;
+}
+
+function clearLocationStatusTimer() {
+  if (!state.locationStatusTimer) return;
+  clearInterval(state.locationStatusTimer);
+  state.locationStatusTimer = null;
+}
+
+function scheduleLocationStatusUpdates(contactName, autoRelayEnabled) {
+  clearLocationStatusTimer();
+  updateShareStatus(true, buildLocationShareStatus(contactName, autoRelayEnabled));
+  state.locationStatusTimer = setInterval(() => {
+    if (!state.locationSharing || !state.locationShareEndsAt) {
+      clearLocationStatusTimer();
+      return;
+    }
+
+    const rem = state.locationShareEndsAt - Date.now();
+    if (rem <= 0) {
+      stopLocationShare(true);
+      return;
+    }
+
+    updateShareStatus(true, buildLocationShareStatus(contactName, autoRelayEnabled));
+  }, LOCATION_STATUS_INTERVAL_MS);
+}
+
+function scheduleLocationDispatch(contact) {
+  if (!contact || !state.locationSharing || !state.locationShareEndsAt) return;
+
+  if (state.locationTimer) {
+    clearTimeout(state.locationTimer);
+  }
+
+  const delayMs = getNextLocationDispatchDelayMs();
+  state.locationTimer = setTimeout(async () => {
+    if (!state.locationSharing) return;
+
+    const rem = state.locationShareEndsAt - Date.now();
+    if (rem <= 0) {
+      stopLocationShare(true);
+      return;
+    }
+
+    try {
+      const result = await sendLocationPayload(contact, {
+        mode: 'scheduled',
+        reason: isRapidAlertLocationWindowActive()
+          ? 'High-frequency location update during the active alert window.'
+          : 'Scheduled live location update.',
+        minutes: Math.max(0, Math.ceil(rem / 60000)),
+      }, {
+        openRoutes: false,
+      });
+
+      if (result.sentAny) {
+        state.lastLocationSentAt = Date.now();
+      }
+    } catch (error) {
+      logEvent({
+        title: 'Scheduled location update failed',
+        detail: getLocationErrorMessage(error),
+        icon: 'fas fa-location-crosshairs',
+        accent: '#F0A03A',
+      });
+    } finally {
+      if (state.locationSharing) {
+        scheduleLocationDispatch(contact);
+      }
+    }
+  }, delayMs);
+}
+
 function clearLocationShareSession() {
-  if (state.locationTimer) clearInterval(state.locationTimer);
+  if (state.locationTimer) clearTimeout(state.locationTimer);
+  clearLocationStatusTimer();
   if (state.locationWatchId !== null && navigator.geolocation) {
     navigator.geolocation.clearWatch(state.locationWatchId);
   }
 
   state.locationTimer = null;
+  state.locationAutoRelayEnabled = false;
+  state.locationContactId = null;
   state.locationWatchId = null;
   state.locationShareEndsAt = null;
   state.lastLocationSentAt = 0;
@@ -4031,6 +4320,7 @@ async function startLocationShare() {
   clearLocationShareSession();
   state.locationSharing = true;
   state.locationContact = contact.name;
+  state.locationContactId = contact.id;
   state.locationShareEndsAt = Date.now() + mins * 60 * 1000;
   updateShareStatus(true, `Getting live GPS for ${contact.name}...`);
 
@@ -4065,27 +4355,20 @@ async function startLocationShare() {
 
   state.lastLocationSentAt = Date.now();
   const startSummary = initialResult.relayDelivered ? 'secure relay' : initialResult.deliveredChannels.join(', ');
-  const continuousNote = 'manual updates only';
-  updateShareStatus(true, `Sharing with ${contact.name} - ${continuousNote}`);
+  const autoRelayEnabled = Boolean(initialResult.relayDelivered);
+  state.locationAutoRelayEnabled = autoRelayEnabled;
+  scheduleLocationStatusUpdates(contact.name, autoRelayEnabled);
   showToast(`Location sent via ${startSummary || 'contact route'}.`, 'teal');
   logEvent({
     title: 'Location sharing started',
-    detail: `Real location sent to ${contact.name} via ${startSummary || 'contact route'}. ${continuousNote}.`,
+    detail: `Real location sent to ${contact.name} via ${startSummary || 'contact route'}. ${autoRelayEnabled ? 'Automatic relay updates are armed.' : 'Automatic relay updates are unavailable, so follow-up sends stay manual.'}`,
     icon: 'fas fa-location-arrow',
     accent: '#198A73',
   });
 
-  state.locationTimer = setInterval(() => {
-    const rem = state.locationShareEndsAt - Date.now();
-    if (rem <= 0) {
-      stopLocationShare(true);
-      return;
-    }
-
-    const minsRemaining = Math.max(1, Math.ceil(rem / 60000));
-    const suffix = `manual updates only - ${minsRemaining}m left`;
-    updateShareStatus(true, `Sharing with ${contact.name} - ${suffix}`);
-  }, 15000);
+  if (autoRelayEnabled) {
+    scheduleLocationDispatch(contact);
+  }
 }
 
 function stopLocationShare(auto) {
@@ -4180,6 +4463,11 @@ function updateBanner() {
     icon.innerHTML  = '<i class="fas fa-triangle-exclamation"></i>';
     label.textContent = 'DANGER DETECTED';
     text.textContent  = 'AI detected danger signals. Emergency alerts are dispatched immediately.';
+  } else if (state.conversation === 'cyber') {
+    banner.classList.add('cyber');
+    icon.innerHTML = '<i class="fas fa-user-secret"></i>';
+    label.textContent = 'CYBER COERCION';
+    text.textContent = 'WearGuard detected cyber-coercion language and routed it through the cyber response path.';
   } else if (state.conversation === 'concern') {
     banner.classList.add('concern');
     icon.innerHTML  = '<i class="fas fa-circle-exclamation"></i>';
@@ -4208,10 +4496,105 @@ function updateChips() {
 }
 
 /* â”€â”€ EVENT LOG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+async function sha256Hex(value) {
+  if (!window.crypto || !window.crypto.subtle) return '';
+
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value || '')));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function rebuildEventChain() {
+  let previousHash = 'GENESIS';
+
+  for (const entry of state.events) {
+    entry.previousHash = previousHash;
+    entry.hash = await sha256Hex(`${previousHash}${entry.timestamp}${entry.title}${entry.detail}`);
+    previousHash = entry.hash;
+  }
+}
+
 function logEvent({ title, detail, icon, accent }) {
-  state.events.unshift({ title, detail, icon, accent, time: new Date() });
-  if (state.events.length > 8) state.events.length = 8;
-  renderEvents();
+  const entry = {
+    title,
+    detail,
+    icon,
+    accent,
+    timestamp: new Date().toISOString(),
+  };
+
+  state.eventLogPromise = state.eventLogPromise
+    .catch(() => {})
+    .then(async () => {
+      state.events.push(entry);
+      if (state.events.length > EVENT_LOG_LIMIT) {
+        state.events = state.events.slice(-EVENT_LOG_LIMIT);
+      }
+      await rebuildEventChain();
+      renderEvents();
+    });
+}
+
+async function verifyEventChain(options) {
+  const cfg = options || {};
+  await state.eventLogPromise.catch(() => {});
+
+  let previousHash = 'GENESIS';
+  let passed = true;
+
+  for (const entry of state.events) {
+    const expectedHash = await sha256Hex(`${previousHash}${entry.timestamp}${entry.title}${entry.detail}`);
+    if (!expectedHash || entry.previousHash !== previousHash || entry.hash !== expectedHash) {
+      passed = false;
+      break;
+    }
+    previousHash = entry.hash;
+  }
+
+  if (!cfg.silent) {
+    showToast(
+      passed
+        ? 'Evidence chain verified successfully.'
+        : 'Evidence chain verification failed.',
+      passed ? 'teal' : 'amber'
+    );
+  }
+
+  return passed;
+}
+
+async function downloadEventLog() {
+  await state.eventLogPromise.catch(() => {});
+  const chainValid = await verifyEventChain({ silent: true });
+  const lines = [
+    'WearGuard Evidence Log',
+    `Generated: ${new Date().toISOString()}`,
+    `Entries: ${state.events.length}`,
+    `Chain: ${chainValid ? 'PASS' : 'FAIL'}`,
+    '',
+  ];
+
+  state.events.forEach((entry, index) => {
+    lines.push(
+      `#${index + 1} ${entry.title}`,
+      `Timestamp: ${entry.timestamp}`,
+      `Detail: ${entry.detail}`,
+      `Hash: ${entry.hash || 'unavailable'}`,
+      `Previous Hash: ${entry.previousHash || 'unavailable'}`,
+      ''
+    );
+  });
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  anchor.href = url;
+  anchor.download = `wearguard-evidence-log-${stamp}.txt`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  showToast('Evidence log downloaded.', 'teal');
 }
 
 function renderEvents() {
@@ -4220,7 +4603,15 @@ function renderEvents() {
 
   list.replaceChildren();
 
-  state.events.forEach((ev) => {
+  if (!state.events.length) {
+    const empty = document.createElement('div');
+    empty.className = 'security-control';
+    empty.textContent = 'No evidence entries yet. WearGuard will chain new safety and cyber events here.';
+    list.appendChild(empty);
+    return;
+  }
+
+  state.events.slice().reverse().forEach((ev) => {
     const row = document.createElement('div');
     row.className = 'event-row';
 
@@ -4246,11 +4637,17 @@ function renderEvents() {
 
     const time = document.createElement('div');
     time.className = 'event-time';
-    time.textContent = formatTime(ev.time);
+    time.textContent = formatTime(ev.timestamp);
 
     body.appendChild(title);
     body.appendChild(detail);
     body.appendChild(time);
+    if (ev.hash) {
+      const hashMeta = document.createElement('div');
+      hashMeta.className = 'event-hash';
+      hashMeta.textContent = `Hash ${ev.hash.slice(0, 12)}...`;
+      body.appendChild(hashMeta);
+    }
 
     row.appendChild(iconWrap);
     row.appendChild(body);
@@ -4263,10 +4660,26 @@ function accent20(hex) {
 }
 
 function formatTime(d) {
-  return d.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(d).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 /* â”€â”€ CARD TOGGLE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function syncDeveloperModeUi() {
+  document.body.classList.toggle('developer-mode', state.developerMode);
+
+  const button = document.getElementById('developerModeToggleBtn');
+  if (!button) return;
+
+  button.classList.toggle('active', state.developerMode);
+  button.setAttribute('aria-pressed', state.developerMode ? 'true' : 'false');
+  button.textContent = state.developerMode ? 'Dev On' : 'Dev';
+}
+
+function toggleDeveloperMode() {
+  state.developerMode = !state.developerMode;
+  syncDeveloperModeUi();
+}
+
 function toggleCard(id) {
   const card = document.getElementById(id);
   if (!card) return;
@@ -4295,6 +4708,7 @@ function showToast(msg, type) {
 
 /* â”€â”€ RENDER ALL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function renderAll() {
+  syncDeveloperModeUi();
   updateWearableUi();
   updateHRDisplay();
   updateBanner();

@@ -63,9 +63,12 @@
         <div class="logo-text">Wear<span>Guard</span></div>
       </div>
     </div>
-    <div class="header-status offline" id="wearableHeaderStatus">
-      <div class="status-dot" id="wearableDot"></div>
-      <span id="wearableLabel">Watch offline</span>
+    <div class="header-tools">
+      <div class="header-status offline" id="wearableHeaderStatus">
+        <div class="status-dot" id="wearableDot"></div>
+        <span id="wearableLabel">Watch offline</span>
+      </div>
+      <button class="dev-toggle" id="developerModeToggleBtn" type="button" aria-pressed="false">Dev</button>
     </div>
   </header>
 
@@ -154,7 +157,7 @@
 
   <!-- CHIP ROW -->
   <div class="chip-row">
-    <div class="chip amber" id="hrChip"><i class="fas fa-heart"></i> <span id="hrChipVal">84 BPM</span></div>
+    <div class="chip amber" id="hrChip"><i class="fas fa-heart"></i> <span id="hrChipVal">-- BPM</span></div>
     <div class="chip" id="contactChip"><i class="fas fa-user-shield"></i> <span id="contactChipVal">No contacts</span></div>
     <div class="chip" id="codeChip"><i class="fas fa-key"></i> <span id="codeChipVal">No code word</span></div>
   </div>
@@ -172,7 +175,7 @@
     <div class="section-body">
       <div class="hr-display">
         <div>
-          <div class="hr-number" id="hrNumber">84</div>
+          <div class="hr-number offline" id="hrNumber">--</div>
           <div class="hr-unit">BPM</div>
         </div>
         <div class="hr-right">
@@ -194,7 +197,7 @@
       <div class="section-icon"><i class="fas fa-brain"></i></div>
       <div>
         <div class="section-title">Safety AI</div>
-        <div class="section-subtitle">Voice & code word detection</div>
+        <div class="section-subtitle">Voice, code word, and cyber-coercion detection</div>
       </div>
       <i class="fas fa-chevron-down section-chevron"></i>
     </div>
@@ -211,7 +214,7 @@
           </div>
         </div>
         <div class="voice-transcript placeholder" id="voiceTranscript" aria-live="polite">
-          WearGuard is starting voice safety monitoring automatically. Speak naturally and Safety AI will analyse your conversation for danger signals and your private code word.
+          WearGuard is starting voice safety monitoring automatically. Speak naturally and Safety AI will analyse your conversation for danger, concern, cyber-coercion signals, and your private code word.
         </div>
         <div class="voice-helper" id="voiceHelper">
           Voice capture starts automatically when the page opens.
@@ -301,6 +304,17 @@
       </div>
 
       <div class="settings-section">
+        <h4><i class="fas fa-diagram-project"></i> Security Webhook</h4>
+        <div class="settings-row">
+          <label class="security-field full" for="securityWebhookUrlInput">
+            <span>Outbound webhook URL</span>
+            <input id="securityWebhookUrlInput" type="url" placeholder="https://siem.example.com/ingest" />
+          </label>
+        </div>
+        <small>Optional SIEM or IT endpoint. WearGuard includes this URL in danger and cyber alert dispatches.</small>
+      </div>
+
+      <div class="settings-section">
         <h4><i class="fas fa-user-shield"></i> Device Access</h4>
         <div class="device-access-card">
           <div class="device-access-title" id="deviceAccessTitle">This device is not trusted yet.</div>
@@ -317,12 +331,12 @@
     </div>
   </div>
 
-  <div class="section-card open" id="cardSecurity">
+  <div class="section-card open developer-card" id="cardSecurity">
     <div class="section-header" data-card-target="cardSecurity" role="button" tabindex="0" aria-expanded="true">
       <div class="section-icon"><i class="fas fa-shield-halved"></i></div>
       <div>
         <div class="section-title">Security Assurance</div>
-        <div class="section-subtitle">Risk, threats, testing, secure integration</div>
+        <div class="section-subtitle">Developer mode: risk, threats, testing, secure integration</div>
       </div>
       <i class="fas fa-chevron-down section-chevron"></i>
     </div>
@@ -475,11 +489,19 @@
       <div class="section-icon"><i class="fas fa-clock-rotate-left"></i></div>
       <div>
         <div class="section-title">Activity Log</div>
-        <div class="section-subtitle">Recent safety events</div>
+        <div class="section-subtitle">Tamper-evident safety and cyber events</div>
       </div>
       <i class="fas fa-chevron-down section-chevron"></i>
     </div>
     <div class="section-body">
+      <div class="wearable-actions log-actions">
+        <button class="mini-btn secondary" id="verifyChainBtn" type="button">
+          <i class="fas fa-shield-check"></i> Verify Chain
+        </button>
+        <button class="mini-btn secondary" id="downloadLogBtn" type="button">
+          <i class="fas fa-download"></i> Download Log
+        </button>
+      </div>
       <div class="event-list" id="eventList"></div>
     </div>
   </div>
